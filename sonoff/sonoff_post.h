@@ -125,6 +125,7 @@ void KNX_CB_Action(message_t const &msg, void *arg);
 #define USE_RF_FLASH                          // Add support for flashing the EFM8BB1 chip on the Sonoff RF Bridge. C2CK must be connected to GPIO4, C2D to GPIO5 on the PCB (+3k code)
 #define USE_TX20_WIND_SENSOR                  // Add support for La Crosse TX20 anemometer (+2k code)
 #define USE_RC_SWITCH                         // Add support for RF transceiver using library RcSwitch (+2k7 code, 460 iram)
+#define USE_KRIDA_DIMMER
 #endif  // USE_SENSORS
 
 /*********************************************************************************************\
@@ -174,6 +175,7 @@ void KNX_CB_Action(message_t const &msg, void *arg);
 #undef USE_RC_SWITCH                          // Disable support for RF transceiver using library RcSwitch
 #undef DEBUG_THEO                             // Disable debug code
 #undef USE_DEBUG_DRIVER                       // Disable debug code
+#undef USE_KRIDA_DIMMER
 #endif  // USE_CLASSIC
 
 /*********************************************************************************************\
@@ -332,6 +334,7 @@ void KNX_CB_Action(message_t const &msg, void *arg);
 #undef USE_RC_SWITCH                          // Disable support for RF transceiver using library RcSwitch
 #undef DEBUG_THEO                             // Disable debug code
 #undef USE_DEBUG_DRIVER                       // Disable debug code
+#undef USE_KRIDA_DIMMER
 #endif  // BE_MINIMAL
 
 /*********************************************************************************************\
