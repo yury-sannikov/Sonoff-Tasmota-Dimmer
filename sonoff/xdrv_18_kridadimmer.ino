@@ -20,8 +20,10 @@
 #define KRIDA_FULL_OFF_VALUE 100
 // Dimmer value equivalent to the full on
 #define KRIDA_FULL_ON_VALUE 0
-//
+// If user on -> off -> on within FORCE_LIMIT_RESET_TIMEOUT_USEC, limit will be temporarely lifted for this ON
 #define FORCE_LIMIT_RESET_TIMEOUT_USEC 2000000
+// Initial old power state value
+#define EMPTY_POWER_STATE 0xFF
 
 typedef union {
   uint32_t  m_raw;
@@ -44,14 +46,51 @@ typedef struct {
   Velocty   m_velocity;
   // Last turn-on time. Used to temporarely override m_limit value and do full-on
   unsigned long m_last_on_time;
+  // Set to true on transition end to report power/dimmer status
+  boolean   m_report_pending;
 } Dimmable;
 
 Dimmable g_items[KRIDA_DEVICES];
 
 // True if active 50 ms velocity for at least one of the dimmables
-volatile boolean g_active_50msec = 0;
+boolean g_active_50msec = 0;
 // True if active 250 ms velocity for at least one of the dimmables
-volatile boolean g_active_250msec = 0;
+boolean g_active_250msec = 0;
+// Holds previous power state value
+uint8_t g_power = EMPTY_POWER_STATE;
+
+
+void reportPowerDimmer() {
+  char scommand[33];
+  char stopic[TOPSZ];
+
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{"));
+
+  for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
+    if (!g_items[i].m_report_pending) {
+      continue;
+    }
+    g_items[i].m_report_pending = false;
+
+    GetPowerDevice(scommand, i + 1, sizeof(scommand), Settings.flag.device_index_enable);
+    byte light_power = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? 0 : 1;
+
+    if (strlen(mqtt_data) > 1) {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,"), mqtt_data);
+    }
+
+    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: report D%d, %s: %d, dim: %d"), i, scommand, light_power, g_items[i].m_value);
+    AddLog(LOG_LEVEL_DEBUG_MORE);
+
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s\"%s\":\"%s\",\"" D_CMND_DIMMER "%d\":%d"),
+      mqtt_data, scommand, GetStateText(light_power), i + 1, KRIDA_FULL_OFF_VALUE - g_items[i].m_value);
+  }
+  if (strlen(mqtt_data) > 1) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
+    GetTopic_P(stopic, STAT, mqtt_topic, S_RSLT_RESULT);
+    MqttPublish(stopic);
+  }
+}
 
 boolean KridaSetPower()
 {
@@ -60,36 +99,56 @@ boolean KridaSetPower()
   uint8_t rpower = XdrvMailbox.index;
   int16_t source = XdrvMailbox.payload;
 
-  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: SetDevicePower.rpower=%d, source=%d"), rpower, source);
+  uint8_t prev_power = g_power;
+  g_power = rpower;
+
+  // Tell to process all bits if prev_power has EMPTY_POWER_STATE value
+  if (prev_power == EMPTY_POWER_STATE) {
+    prev_power = ~rpower;
+  }
+
+  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: SetDevicePower.rpower=%d, source=%d, prev_power=%d"), rpower, source, prev_power);
   AddLog(LOG_LEVEL_DEBUG);
+
+  // Check if power state
+  if (source == SRC_LIGHT) {
+    reportPowerDimmer();
+    // Do not need to update target & velocity since this call was made by the transition end
+    return true;
+  }
 
   // Go over devices and update their target values and velocities
   for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
-    if (rpower & 1) { // Turn power on
-      unsigned long usec = micros();
 
-      // Remove limit if user on->off->on within FORCE_LIMIT_RESET_TIMEOUT_USEC
-      // This option allow to override max limit to get full bright of the lights
-      int32_t limit = g_items[i].m_limit;
-      if (usec - g_items[i].m_last_on_time < FORCE_LIMIT_RESET_TIMEOUT_USEC) {
-        limit = KRIDA_FULL_ON_VALUE;
+    // Process only updated bits
+    if ((prev_power & 1) != (rpower & 1)) {
+      if (rpower & 1) { // Turn power on
+        unsigned long usec = micros();
+
+        // Remove limit if user on->off->on within FORCE_LIMIT_RESET_TIMEOUT_USEC
+        // This option allow to override max limit to get full bright of the lights
+        int32_t limit = g_items[i].m_limit;
+        if (usec - g_items[i].m_last_on_time < FORCE_LIMIT_RESET_TIMEOUT_USEC) {
+          limit = KRIDA_FULL_ON_VALUE;
+        }
+        g_items[i].m_last_on_time = usec;
+
+        g_items[i].m_taget = limit;
+        g_items[i].m_velocity.m_value = KRIDA_ON_VELOCITY;
+        g_items[i].m_velocity.m_slow = 0;
+        g_active_50msec = true;
+      } else { // Turn power off
+        g_items[i].m_taget = KRIDA_FULL_OFF_VALUE;
+        g_items[i].m_velocity.m_value = KRIDA_OFF_VELOCITY;
+        g_items[i].m_velocity.m_slow = 0;
+        g_active_50msec = true;
       }
-      g_items[i].m_last_on_time = usec;
-
-      g_items[i].m_taget = limit;
-      g_items[i].m_velocity.m_value = KRIDA_ON_VELOCITY;
-      g_items[i].m_velocity.m_slow = 0;
-      g_active_50msec = true;
-    } else { // Turn power off
-      g_items[i].m_taget = KRIDA_FULL_OFF_VALUE;
-      g_items[i].m_velocity.m_value = KRIDA_OFF_VELOCITY;
-      g_items[i].m_velocity.m_slow = 0;
-      g_active_50msec = true;
+      snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d :: m_target=%d, m_value=%d"), i, g_items[i].m_taget, g_items[i].m_value);
+      AddLog(LOG_LEVEL_DEBUG_MORE);
     }
-    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d :: m_target=%d, m_value=%d"), i, g_items[i].m_taget, g_items[i].m_value);
-    AddLog(LOG_LEVEL_DEBUG);
 
     rpower = rpower >> 1;
+    prev_power = prev_power >> 1;
   }
 
   return true;
@@ -116,6 +175,8 @@ void KridaInit()
   if (!Settings.param[P_TUYA_DIMMER_ID]) {
     Settings.param[P_TUYA_DIMMER_ID] = KRIDA_DEFAULT_MODE;
   }
+
+  g_power = EMPTY_POWER_STATE;
 
   // Zero out all states
   memset(g_items, 0, sizeof(g_items));
@@ -161,10 +222,13 @@ boolean advanceDimmers(boolean isSlow) {
     if (g_items[i].m_value == g_items[i].m_taget) {
       continue;
     }
+    uint8_t power_state = EMPTY_POWER_STATE;
 
     // If velocity value is zero (and values does not match), set value to target
     if (g_items[i].m_velocity.m_value == 0) {
       g_items[i].m_value = g_items[i].m_taget;
+      g_items[i].m_report_pending = true;
+      power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
     } else {
       // Get diff between current value and target value
       int32_t diff = g_items[i].m_value - g_items[i].m_taget;
@@ -172,6 +236,8 @@ boolean advanceDimmers(boolean isSlow) {
       // If diff between target and value is less-eq that delta, update value to the target
       if (abs(diff) <= delta) {
         g_items[i].m_value = g_items[i].m_taget;
+        g_items[i].m_report_pending = true;
+        power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
       } else {
         // A case, where value far from target. Move value toward the target
         g_items[i].m_value = diff > 0 ? g_items[i].m_value - delta : g_items[i].m_value + delta;
@@ -180,6 +246,12 @@ boolean advanceDimmers(boolean isSlow) {
     }
     // Update actual dimmer value
     setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == g_items[i].m_taget);
+
+    // Update internal power state w/o reporting
+    if (power_state != EMPTY_POWER_STATE) {
+      ExecuteCommandPower(i + 1, power_state, SRC_LIGHT);
+    }
+
   }
   return hasPending;
 }
