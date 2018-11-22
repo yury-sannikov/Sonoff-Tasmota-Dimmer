@@ -110,7 +110,7 @@ boolean KridaSetPower()
   snprintf_P(log_data, sizeof(log_data), PSTR("KRI: SetDevicePower.rpower=%d, source=%d, prev_power=%d"), rpower, source, prev_power);
   AddLog(LOG_LEVEL_DEBUG);
 
-  // Check if power state
+  // Check if power state has been triggered due to dimmer animation completion
   if (source == SRC_LIGHT) {
     reportPowerDimmer();
     // Do not need to update target & velocity since this call was made by the transition end
@@ -163,7 +163,23 @@ boolean KridaModuleSelected()
   light_type = LT_BASIC;
   devices_present = KRIDA_DEVICES;
 
-  snprintf_P(log_data, sizeof(log_data), "KRI: KridaModuleSelected called");
+  // Zero out all states
+  memset(g_items, 0, sizeof(g_items));
+
+  if (!Settings.param[P_TUYA_DIMMER_ID]) {
+    Settings.param[P_TUYA_DIMMER_ID] = KRIDA_DEFAULT_MODE;
+  }
+
+  power_t pwr = Settings.power;
+  // Set up values
+  for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
+    g_items[i].m_taget = (pwr & 1) ? KRIDA_FULL_ON_VALUE : KRIDA_FULL_OFF_VALUE;
+    g_items[i].m_value = g_items[i].m_taget;
+    g_items[i].m_limit = KRIDA_FULL_ON_VALUE;
+    pwr >>= 1;
+  }
+
+  snprintf_P(log_data, sizeof(log_data), "KRI: KridaModuleSelected called, pwr: %d", Settings.power);
   AddLog(LOG_LEVEL_DEBUG);
   return true;
 }
@@ -171,25 +187,11 @@ boolean KridaModuleSelected()
 
 void KridaInit()
 {
-  // Reuse SetOption34 for Krida
-  if (!Settings.param[P_TUYA_DIMMER_ID]) {
-    Settings.param[P_TUYA_DIMMER_ID] = KRIDA_DEFAULT_MODE;
-  }
-
-  g_power = EMPTY_POWER_STATE;
-
-  // Zero out all states
-  memset(g_items, 0, sizeof(g_items));
-
-  // Set up values
-  for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
-    g_items[i].m_value = KRIDA_FULL_OFF_VALUE;
-    g_items[i].m_taget = KRIDA_FULL_OFF_VALUE;
-    g_items[i].m_limit = KRIDA_FULL_ON_VALUE;
-  }
-
   snprintf_P(log_data, sizeof(log_data), "KRI: Init");
   AddLog(LOG_LEVEL_DEBUG);
+  for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
+    setDimmerValue(i, g_items[i].m_value, true);
+  }
 }
 
 /*
