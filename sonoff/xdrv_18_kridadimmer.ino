@@ -25,15 +25,12 @@
 // Initial old power state value
 #define EMPTY_POWER_STATE 0xFF
 
-typedef union {
-  uint32_t  m_raw;
-    struct {
-      // Current velocity value
-      uint32_t m_value : 31;
-      // Use 1 - FUNC_EVERY_250_MSECOND units, 0 - use FUNC_EVERY_50_MSECOND
-      uint32_t m_slow : 1;
-    };
-} Velocty;
+struct Velocty {
+  // Current velocity value
+  uint32_t m_value : 31;
+  // Use 1 - FUNC_EVERY_250_MSECOND units, 0 - use FUNC_EVERY_50_MSECOND
+  uint32_t m_slow : 1;
+};
 
 typedef struct {
   // Current dimmer value
@@ -113,7 +110,7 @@ boolean KridaSetPower()
   // Check if power state has been triggered due to dimmer animation completion
   if (source == SRC_LIGHT) {
     reportPowerDimmer();
-    // Do not need to update target & velocity since this call was made by the transition end
+    // Do not need to update target & velocity since this call was made by the transition end event
     return true;
   }
 
@@ -157,7 +154,7 @@ boolean KridaSetPower()
 boolean KridaModuleSelected()
 {
   if (!(pin[GPIO_I2C_SCL] < 99) || !(pin[GPIO_I2C_SDA] < 99)) {
-    snprintf_P(log_data, sizeof(log_data), "KRI: I2C pins not set");
+    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: I2C pins not set"));
     AddLog(LOG_LEVEL_DEBUG);
   }
   light_type = LT_BASIC;
@@ -179,7 +176,7 @@ boolean KridaModuleSelected()
     pwr >>= 1;
   }
 
-  snprintf_P(log_data, sizeof(log_data), "KRI: KridaModuleSelected called, pwr: %d", Settings.power);
+  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: KridaModuleSelected called, pwr: %d"), Settings.power);
   AddLog(LOG_LEVEL_DEBUG);
   return true;
 }
@@ -258,6 +255,63 @@ boolean advanceDimmers(boolean isSlow) {
   return hasPending;
 }
 
+
+boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limit, struct Velocty velocty) {
+  if (index >= KRIDA_DEVICES) {
+    return false;
+  }
+  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update D%d, value=%d, limit=%d, v=%d/%d"),
+    index, value, limit, velocty.m_value, velocty.m_slow);
+  AddLog(LOG_LEVEL_DEBUG);
+
+  if (value <= KRIDA_FULL_OFF_VALUE) {
+    g_items[index].m_taget = value;
+  }
+  if (limit <= KRIDA_FULL_OFF_VALUE) {
+    g_items[index].m_limit = limit;
+  }
+
+  g_items[index].m_velocity = velocty;
+  if (velocty.m_slow) {
+    g_active_250msec = true;
+  } else {
+    g_active_50msec = true;
+  }
+  return true;
+}
+
+enum KridaCommands {
+  KRI_CMND_DIMMER, KRI_CMND_DIMLIM };
+const char g_kridaCommands[] PROGMEM =
+  D_CMND_DIMMER "|DIMLIM";
+
+boolean KridaCommand()
+{
+  char command [CMDSZ];
+  int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic, g_kridaCommands);
+
+  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: cmd %s"), XdrvMailbox.topic);
+  AddLog(LOG_LEVEL_DEBUG);
+
+  switch (command_code) {
+    case KRI_CMND_DIMMER:
+      return updateDimmerTargetAndLimit(XdrvMailbox.index - 1,
+        100 - XdrvMailbox.payload16,
+        -1,
+        { .m_value = KRIDA_ON_VELOCITY, .m_slow = 0 }
+      );
+    case KRI_CMND_DIMLIM:
+      return updateDimmerTargetAndLimit(XdrvMailbox.index - 1,
+        -1,
+        100 - XdrvMailbox.payload16,
+        { .m_value = KRIDA_AUGMENTATION_VELOCITY_SLOW, .m_slow = 1 }
+      );
+    default:
+      return false;
+  }
+
+}
+
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
@@ -288,6 +342,9 @@ boolean Xdrv18(byte function)
         if (g_active_250msec) {
           g_active_250msec = advanceDimmers(true);
         }
+        break;
+      case FUNC_COMMAND:
+        result = KridaCommand();
         break;
     }
   }
