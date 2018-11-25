@@ -15,7 +15,7 @@
 // Dimmer on velocity.
 #define KRIDA_ON_VELOCITY 5
 // Dimmer limit augmentation velocity (in FUNC_EVERY_250_MSECOND units)
-#define KRIDA_AUGMENTATION_VELOCITY_SLOW 5
+#define KRIDA_AUGMENTATION_VELOCITY_SLOW 1
 // Dimmer value equivalent to the full off
 #define KRIDA_FULL_OFF_VALUE 100
 // Dimmer value equivalent to the full on
@@ -44,7 +44,7 @@ typedef struct {
   // Last turn-on time. Used to temporarely override m_limit value and do full-on
   unsigned long m_last_on_time;
   // Set to true on transition end to report power/dimmer status
-  boolean   m_report_pending;
+  boolean   m_should_report_status;
 } Dimmable;
 
 Dimmable g_items[KRIDA_DEVICES];
@@ -157,7 +157,7 @@ boolean KridaModuleSelected()
     snprintf_P(log_data, sizeof(log_data), PSTR("KRI: I2C pins not set"));
     AddLog(LOG_LEVEL_DEBUG);
   }
-  light_type = LT_BASIC;
+  light_type = 0;
   devices_present = KRIDA_DEVICES;
 
   // Zero out all states
@@ -226,7 +226,7 @@ boolean advanceDimmers(boolean isSlow) {
     // If velocity value is zero (and values does not match), set value to target
     if (g_items[i].m_velocity.m_value == 0) {
       g_items[i].m_value = g_items[i].m_taget;
-      g_items[i].m_report_pending = true;
+      g_items[i].m_should_report_status = true;
       power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
     } else {
       // Get diff between current value and target value
@@ -235,7 +235,7 @@ boolean advanceDimmers(boolean isSlow) {
       // If diff between target and value is less-eq that delta, update value to the target
       if (abs(diff) <= delta) {
         g_items[i].m_value = g_items[i].m_taget;
-        g_items[i].m_report_pending = true;
+        g_items[i].m_should_report_status = true;
         power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
       } else {
         // A case, where value far from target. Move value toward the target
@@ -260,15 +260,23 @@ boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limi
   if (index >= KRIDA_DEVICES) {
     return false;
   }
-  snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update D%d, value=%d, limit=%d, v=%d/%d"),
-    index, value, limit, velocty.m_value, velocty.m_slow);
-  AddLog(LOG_LEVEL_DEBUG);
 
   if (value <= KRIDA_FULL_OFF_VALUE) {
+    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update target D%d << %d"),
+      index, value);
+    AddLog(LOG_LEVEL_DEBUG);
+
     g_items[index].m_taget = value;
   }
   if (limit <= KRIDA_FULL_OFF_VALUE) {
+    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update limit D%d <| %d"),
+      index, limit);
+    AddLog(LOG_LEVEL_DEBUG);
+
     g_items[index].m_limit = limit;
+    if (g_items[index].m_taget != KRIDA_FULL_OFF_VALUE) {
+      g_items[index].m_taget = limit;
+    }
   }
 
   g_items[index].m_velocity = velocty;
