@@ -24,6 +24,13 @@
 #define FORCE_LIMIT_RESET_TIMEOUT_USEC 2000000
 // Initial old power state value
 #define EMPTY_POWER_STATE 0xFF
+// Dimmer value equivalent to the full on when SetOption34 set to `leak` limit
+#define KRIDA_LEAKED_FULL_ON_VALUE 25
+
+#define KRIDA_I2C_ADDR 0x27
+
+const char S_DIMMER_COMMAND_VALUE[] PROGMEM = "{\"DIMMER%d\":%d,\"LIMIT%d\":%d,\"LEAK%d\":%d}";
+
 
 struct Velocty {
   // Current velocity value
@@ -36,7 +43,7 @@ typedef struct {
   // Current dimmer value
   int32_t   m_value;
   // Current dimmer value target
-  int32_t   m_taget;
+  int32_t   m_target;
   // Current dimmer limit. It might be engaged during night time not to blind people or in a `cinema` mode
   int32_t   m_limit;
   // Curent velocity of m_value change
@@ -64,10 +71,10 @@ void reportPowerDimmer() {
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{"));
 
   for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
-    if (!g_items[i].m_report_pending) {
+    if (!g_items[i].m_should_report_status) {
       continue;
     }
-    g_items[i].m_report_pending = false;
+    g_items[i].m_should_report_status = false;
 
     GetPowerDevice(scommand, i + 1, sizeof(scommand), Settings.flag.device_index_enable);
     byte light_power = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? 0 : 1;
@@ -130,17 +137,17 @@ boolean KridaSetPower()
         }
         g_items[i].m_last_on_time = usec;
 
-        g_items[i].m_taget = limit;
+        g_items[i].m_target = limit;
         g_items[i].m_velocity.m_value = KRIDA_ON_VELOCITY;
         g_items[i].m_velocity.m_slow = 0;
         g_active_50msec = true;
       } else { // Turn power off
-        g_items[i].m_taget = KRIDA_FULL_OFF_VALUE;
+        g_items[i].m_target = KRIDA_FULL_OFF_VALUE;
         g_items[i].m_velocity.m_value = KRIDA_OFF_VELOCITY;
         g_items[i].m_velocity.m_slow = 0;
         g_active_50msec = true;
       }
-      snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d :: m_target=%d, m_value=%d"), i, g_items[i].m_taget, g_items[i].m_value);
+      snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d :: m_target=%d, m_value=%d"), i, g_items[i].m_target, g_items[i].m_value);
       AddLog(LOG_LEVEL_DEBUG_MORE);
     }
 
@@ -170,8 +177,8 @@ boolean KridaModuleSelected()
   power_t pwr = Settings.power;
   // Set up values
   for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
-    g_items[i].m_taget = (pwr & 1) ? KRIDA_FULL_ON_VALUE : KRIDA_FULL_OFF_VALUE;
-    g_items[i].m_value = g_items[i].m_taget;
+    g_items[i].m_target = (pwr & 1) ? KRIDA_FULL_ON_VALUE : KRIDA_FULL_OFF_VALUE;
+    g_items[i].m_value = g_items[i].m_target;
     g_items[i].m_limit = KRIDA_FULL_ON_VALUE;
     pwr >>= 1;
   }
@@ -195,15 +202,24 @@ void KridaInit()
   setDimmerValue communicate through I2C interface and set actuall dimmer value to the KRIDA device
 */
 void setDimmerValue(size_t dimmerIndex, int32_t value, boolean final) {
-  // TODO:
-  if (value % 10 == 0 || final) {
-    snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d <-- %d"), dimmerIndex, value);
-    AddLog(LOG_LEVEL_DEBUG);
-  }
+  uint8_t buffer[] = {
+    (uint8_t)g_items[0].m_value,
+    0x81,
+    (uint8_t)g_items[1].m_value,
+    0x82,
+    (uint8_t)g_items[2].m_value,
+    0x83,
+    (uint8_t)g_items[3].m_value
+  };
+  I2cWriteBuffer(KRIDA_I2C_ADDR, 0x80, buffer, sizeof(buffer) / sizeof(uint8_t));
+  // if (value % 5 == 0 || final) {
+  //   snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d <-- %d"), dimmerIndex, value);
+  //   AddLog(LOG_LEVEL_DEBUG);
+  // }
 }
 
 /*
-  advanceDimmers - go over dimmers and update m_value toward m_taget following m_velocity rule
+  advanceDimmers - go over dimmers and update m_value toward m_target following m_velocity rule
   boolean isSlow - true: should advance 250ms timers, false - 50ms timers
   return:
     true - keep updating correspontent timer set
@@ -218,23 +234,23 @@ boolean advanceDimmers(boolean isSlow) {
     }
 
     // If value match target, do nothing
-    if (g_items[i].m_value == g_items[i].m_taget) {
+    if (g_items[i].m_value == g_items[i].m_target) {
       continue;
     }
     uint8_t power_state = EMPTY_POWER_STATE;
 
     // If velocity value is zero (and values does not match), set value to target
     if (g_items[i].m_velocity.m_value == 0) {
-      g_items[i].m_value = g_items[i].m_taget;
+      g_items[i].m_value = g_items[i].m_target;
       g_items[i].m_should_report_status = true;
       power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
     } else {
       // Get diff between current value and target value
-      int32_t diff = g_items[i].m_value - g_items[i].m_taget;
+      int32_t diff = g_items[i].m_value - g_items[i].m_target;
       int32_t delta = g_items[i].m_velocity.m_value;
       // If diff between target and value is less-eq that delta, update value to the target
       if (abs(diff) <= delta) {
-        g_items[i].m_value = g_items[i].m_taget;
+        g_items[i].m_value = g_items[i].m_target;
         g_items[i].m_should_report_status = true;
         power_state = g_items[i].m_value == KRIDA_FULL_OFF_VALUE ? POWER_OFF_NO_STATE : POWER_ON_NO_STATE;
       } else {
@@ -244,7 +260,7 @@ boolean advanceDimmers(boolean isSlow) {
       }
     }
     // Update actual dimmer value
-    setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == g_items[i].m_taget);
+    setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == g_items[i].m_target);
 
     // Update internal power state w/o reporting
     if (power_state != EMPTY_POWER_STATE) {
@@ -265,8 +281,11 @@ boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limi
     snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update target D%d << %d"),
       index, value);
     AddLog(LOG_LEVEL_DEBUG);
-
-    g_items[index].m_taget = value;
+    // Obey limit
+    if (value < g_items[index].m_limit) {
+      value = g_items[index].m_limit;
+    }
+    g_items[index].m_target = value;
   }
   if (limit <= KRIDA_FULL_OFF_VALUE) {
     snprintf_P(log_data, sizeof(log_data), PSTR("KRI: update limit D%d <| %d"),
@@ -274,8 +293,8 @@ boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limi
     AddLog(LOG_LEVEL_DEBUG);
 
     g_items[index].m_limit = limit;
-    if (g_items[index].m_taget != KRIDA_FULL_OFF_VALUE) {
-      g_items[index].m_taget = limit;
+    if (g_items[index].m_target != KRIDA_FULL_OFF_VALUE) {
+      g_items[index].m_target = limit;
     }
   }
 
@@ -300,24 +319,52 @@ boolean KridaCommand()
 
   snprintf_P(log_data, sizeof(log_data), PSTR("KRI: cmd %s"), XdrvMailbox.topic);
   AddLog(LOG_LEVEL_DEBUG);
-
-  switch (command_code) {
-    case KRI_CMND_DIMMER:
-      return updateDimmerTargetAndLimit(XdrvMailbox.index - 1,
-        100 - XdrvMailbox.payload16,
-        -1,
-        { .m_value = KRIDA_ON_VELOCITY, .m_slow = 0 }
-      );
-    case KRI_CMND_DIMLIM:
-      return updateDimmerTargetAndLimit(XdrvMailbox.index - 1,
-        -1,
-        100 - XdrvMailbox.payload16,
-        { .m_value = KRIDA_AUGMENTATION_VELOCITY_SLOW, .m_slow = 1 }
-      );
-    default:
-      return false;
+  uint16_t index = XdrvMailbox.index - 1;
+  if (strlen(XdrvMailbox.data) > 0) {
+    switch (command_code) {
+      case KRI_CMND_DIMMER:
+        updateDimmerTargetAndLimit(index,
+          100 - XdrvMailbox.payload16,
+          -1,
+          { .m_value = KRIDA_ON_VELOCITY, .m_slow = 0 }
+        );
+        break;
+      case KRI_CMND_DIMLIM:
+        updateDimmerTargetAndLimit(index,
+          -1,
+          100 - XdrvMailbox.payload16,
+          { .m_value = KRIDA_AUGMENTATION_VELOCITY_SLOW, .m_slow = 1 }
+        );
+        break;
+      default:
+        return false;
+    }
   }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), S_DIMMER_COMMAND_VALUE,
+    XdrvMailbox.index, 100 - g_items[index].m_target, XdrvMailbox.index, 100 - g_items[index].m_limit,
+    XdrvMailbox.index, ((Settings.param[P_TUYA_DIMMER_ID] >> index) & 1)
+  );
+  return true;
+}
 
+// If SetOption34 bit set for the dimmer and it's `on`, it means that every second value should get increased toward
+// max value discarding limit.
+// Used to work as a night mode bathrooms/stairs
+void leakToFullOn() {
+    uint8_t param = Settings.param[P_TUYA_DIMMER_ID];
+    uint8_t mask = 1;
+    for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
+      if (g_items[i].m_target != KRIDA_FULL_OFF_VALUE
+        && (param & mask)
+        && (g_items[i].m_target == g_items[i].m_limit)) {
+        if (g_items[i].m_value > KRIDA_LEAKED_FULL_ON_VALUE) {
+          g_items[i].m_value -= 1;
+          // Update actual dimmer value
+          setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == KRIDA_LEAKED_FULL_ON_VALUE);
+        }
+      }
+      mask <<= 1;
+    }
 }
 
 /*********************************************************************************************\
@@ -350,6 +397,9 @@ boolean Xdrv18(byte function)
         if (g_active_250msec) {
           g_active_250msec = advanceDimmers(true);
         }
+        break;
+      case FUNC_EVERY_SECOND:
+        leakToFullOn();
         break;
       case FUNC_COMMAND:
         result = KridaCommand();
