@@ -26,10 +26,12 @@
 #define EMPTY_POWER_STATE 0xFF
 // Dimmer value equivalent to the full on when SetOption34 set to `leak` limit
 #define KRIDA_LEAKED_FULL_ON_VALUE 25
+// Dimmer increase each N seconds
+#define LEAK_INCREASE_SECONDS 5
 
 #define KRIDA_I2C_ADDR 0x27
 
-const char S_DIMMER_COMMAND_VALUE[] PROGMEM = "{\"DIMMER%d\":%d,\"LIMIT%d\":%d,\"LEAK%d\":%d}";
+const char S_DIMMER_COMMAND_VALUE[] PROGMEM = "{\"DIMMER%d\":%d,\"LIMIT%d\":%d,\"LEAK%d\":%d,\"VALUE%d\":%d}";
 
 
 struct Velocty {
@@ -52,6 +54,8 @@ typedef struct {
   unsigned long m_last_on_time;
   // Set to true on transition end to report power/dimmer status
   boolean   m_should_report_status;
+  // Leak seconds counter
+  uint8_t   m_seconds_counter;
 } Dimmable;
 
 Dimmable g_items[KRIDA_DEVICES];
@@ -147,6 +151,8 @@ boolean KridaSetPower()
         g_items[i].m_velocity.m_slow = 0;
         g_active_50msec = true;
       }
+      g_items[i].m_seconds_counter = 0;
+
       snprintf_P(log_data, sizeof(log_data), PSTR("KRI: D%d :: m_target=%d, m_value=%d"), i, g_items[i].m_target, g_items[i].m_value);
       AddLog(LOG_LEVEL_DEBUG_MORE);
     }
@@ -180,6 +186,7 @@ boolean KridaModuleSelected()
     g_items[i].m_target = (pwr & 1) ? KRIDA_FULL_ON_VALUE : KRIDA_FULL_OFF_VALUE;
     g_items[i].m_value = g_items[i].m_target;
     g_items[i].m_limit = KRIDA_FULL_ON_VALUE;
+    g_items[i].m_seconds_counter = 0;
     pwr >>= 1;
   }
 
@@ -298,6 +305,7 @@ boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limi
     }
   }
 
+  g_items[index].m_seconds_counter = 0;
   g_items[index].m_velocity = velocty;
   if (velocty.m_slow) {
     g_active_250msec = true;
@@ -341,8 +349,10 @@ boolean KridaCommand()
     }
   }
   snprintf_P(mqtt_data, sizeof(mqtt_data), S_DIMMER_COMMAND_VALUE,
-    XdrvMailbox.index, 100 - g_items[index].m_target, XdrvMailbox.index, 100 - g_items[index].m_limit,
-    XdrvMailbox.index, ((Settings.param[P_TUYA_DIMMER_ID] >> index) & 1)
+    XdrvMailbox.index, 100 - g_items[index].m_target,
+    XdrvMailbox.index, 100 - g_items[index].m_limit,
+    XdrvMailbox.index, ((Settings.param[P_TUYA_DIMMER_ID] >> index) & 1),
+    XdrvMailbox.index, 100 - g_items[index].m_value
   );
   return true;
 }
@@ -358,9 +368,14 @@ void leakToFullOn() {
         && (param & mask)
         && (g_items[i].m_target == g_items[i].m_limit)) {
         if (g_items[i].m_value > KRIDA_LEAKED_FULL_ON_VALUE) {
-          g_items[i].m_value -= 1;
-          // Update actual dimmer value
-          setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == KRIDA_LEAKED_FULL_ON_VALUE);
+
+          g_items[i].m_seconds_counter += 1;
+          if (g_items[i].m_seconds_counter >= LEAK_INCREASE_SECONDS) {
+            g_items[i].m_seconds_counter = 0;
+            g_items[i].m_value -= 1;
+            // Update actual dimmer value
+            setDimmerValue(i, g_items[i].m_value, g_items[i].m_value == KRIDA_LEAKED_FULL_ON_VALUE);
+          }
         }
       }
       mask <<= 1;
