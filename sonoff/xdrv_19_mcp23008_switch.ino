@@ -94,6 +94,8 @@ uint8_t mcp230_switch_type = MCP_TYPE_NONE;
 // An input mask. Calculated based on the settings. GPIO read values outside of the mask will be ignored
 // 0-7 bits - bank0, 8-15 bits - bank1
 uint16_t mcp230_switch_input_mask = 0;
+// Hold last power state to compare with. If changed, update feedback pins
+power_t mcp230_switch_last_power_state = 0;
 
 uint8_t MCPSwitch_readGPIO(uint8_t bank) {
   return I2cRead8(USE_MCP230xx_ADDR, MCP230family_GPIO + bank);
@@ -124,19 +126,17 @@ void MCPSwitch_ApplySettings(void) {
       } else {
         // Set register as an output
         reg_iodir &= ~pinmask;
-        // if save_state is set, sync up reg_portpins value with the power state
-        if (Settings.flag.save_state) {
-          // Get mask from power_gpoup.
-          power_t mask = 1 << cfg[cidx].power_gpoup;
-          // If power match mask, set value to pinmask to set proper bit in reg_portpins
-          power_t value = (Settings.power & mask) ? pinmask : 0;
-          // Invert a bit if current pin mode is in inverted feedback
-          if (cfg[cidx].pinmode == MCP_MODE_FEEDBACK_INV) {
-            value ^= pinmask;
-          }
-          // Update port pin
-          reg_portpins |= value;
+        // Sync up power state.
+        // Get mask from power_gpoup.
+        power_t mask = 1 << cfg[cidx].power_gpoup;
+        // If power match mask, set value to pinmask to set proper bit in reg_portpins
+        power_t value = (Settings.power & mask) ? pinmask : 0;
+        // Invert a bit if current pin mode is in inverted feedback
+        if (cfg[cidx].pinmode == MCP_MODE_FEEDBACK_INV) {
+          value ^= pinmask;
         }
+        // Update port pin
+        reg_portpins |= value;
       }
     }
     snprintf_P(log_data, sizeof(log_data), PSTR("SWI: Bank%d GPPU(0x%X) IODIR(0x%X) GPIO(0x%X)"), mcp_bank, reg_gppu, reg_iodir, reg_portpins);
@@ -196,6 +196,7 @@ void MCPSwitch_Detect(void)
       }
     }
   }
+  mcp230_switch_last_power_state = power;
 }
 
 
@@ -269,9 +270,46 @@ boolean MCPSwitch_Command()
     MCPSwitch_Status();
     return true;
   }
-
-
   return true;
+}
+
+// SyncPower check current power status and update feedback GPIO pins if it was changed
+void MCPSwitch_SyncPower() {
+  if (mcp230_switch_type == MCP_TYPE_NONE) {
+    return;
+  }
+  if (mcp230_switch_last_power_state == power) {
+    return;
+  }
+  snprintf_P(log_data, sizeof(log_data), PSTR("SWI: sync power 0x%X => 0x%X"),
+    mcp230_switch_last_power_state, power);
+  AddLog(LOG_LEVEL_DEBUG);
+
+  mcp230_switch_last_power_state = power;
+
+  Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
+  for (uint8_t mcp_bank = 0; mcp_bank < mcp230_switch_type; ++mcp_bank) {
+    uint8_t reg_portpins = 0x00;
+    for (uint8_t idx = 0; idx < 8; idx++) {
+      uint8_t cidx = idx + (mcp_bank * 8);
+      uint8_t pinmask = (1 << idx);
+      if ((cfg[cidx].pinmode & PIN_MODE_OUTPUT_MASK) == 0) {
+        continue;
+      }
+      // Get mask from power_gpoup.
+      power_t mask = 1 << cfg[cidx].power_gpoup;
+      // If power match mask, set value to pinmask to set proper bit in reg_portpins
+      power_t value = (power & mask) ? pinmask : 0;
+      // Invert a bit if current pin mode is in inverted feedback
+      if (cfg[cidx].pinmode == MCP_MODE_FEEDBACK_INV) {
+        value ^= pinmask;
+      }
+      // Update port pin
+      reg_portpins |= value;
+    }
+    I2cWrite8(USE_MCP230xx_ADDR, MCP230family_GPIO + mcp_bank, reg_portpins);
+  }
+
 }
 
 /*********************************************************************************************\
@@ -294,9 +332,10 @@ boolean Xdrv19(byte function)
     case FUNC_COMMAND:
       result = MCPSwitch_Command();
       break;
-
+    case FUNC_EVERY_100_MSECOND:
+      MCPSwitch_SyncPower();
+      break;
   }
-
   return result;
 }
 
