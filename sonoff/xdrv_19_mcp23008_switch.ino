@@ -110,9 +110,9 @@ void MCPSwitch_ApplySettings(void) {
     uint8_t reg_portpins = 0x00;
     // Do not use any interrupts, only pooling
     uint8_t reg_gpinten = 0;
-    // Pullup (not used). You probably need at least an RC filter with strong pullup
+    // Pullup. You probably need at least an RC filter with strong pullup
     // to avoid interference with mains
-    uint8_t reg_gppu = 0xFF;
+    uint8_t reg_gppu = 0;
 
     for (uint8_t idx = 0; idx < 8; idx++) {
       uint8_t cidx = idx + (mcp_bank * 8);
@@ -120,20 +120,16 @@ void MCPSwitch_ApplySettings(void) {
       // 1 - input,  0 - output
       if ((cfg[cidx].pinmode & PIN_MODE_OUTPUT_MASK) == 0) {
         reg_iodir |= pinmask;
+        reg_gppu |= cfg[cidx].pullup ? pinmask : 0;
       } else {
         // Set register as an output
         reg_iodir &= ~pinmask;
         // if save_state is set, sync up reg_portpins value with the power state
         if (Settings.flag.save_state) {
-          power_t value;
-          if (mcp_bank == 0) {
-            value = Settings.power & 0x00FF;
-          } else {
-            value = (Settings.power & 0xFF00) >> 8;
-          }
-          // Mask a Settings.power bit according to the pin index
-          value &= pinmask;
-
+          // Get mask from power_gpoup.
+          power_t mask = 1 << cfg[cidx].power_gpoup;
+          // If power match mask, set value to pinmask to set proper bit in reg_portpins
+          power_t value = (Settings.power & mask) ? pinmask : 0;
           // Invert a bit if current pin mode is in inverted feedback
           if (cfg[cidx].pinmode == MCP_MODE_FEEDBACK_INV) {
             value ^= pinmask;
@@ -214,7 +210,7 @@ const char g_MCPSwitchCommands[] PROGMEM =
 
 const char* MCPSwitch_GetPinModeText(uint8_t mode) {
   switch(mode) {
-    case MCP_MODE_FOLLOW: return "NF";
+    case MCP_MODE_FOLLOW: return "FN";
     case MCP_MODE_FOLLOW_INV: return "FI";
     case MCP_MODE_TOGGLE: return "TG";
     case MCP_MODE_FEEDBACK: return "SN";
