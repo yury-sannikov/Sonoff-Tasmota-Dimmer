@@ -342,6 +342,9 @@ boolean KridaCommand()
 {
   char command [CMDSZ];
   int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic, g_kridaCommands);
+  if (-1 == command_code) {
+    return false;
+  }
 
   snprintf_P(log_data, sizeof(log_data), PSTR("KRI: cmd %s"), XdrvMailbox.topic);
   AddLog(LOG_LEVEL_DEBUG);

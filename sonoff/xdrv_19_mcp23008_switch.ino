@@ -29,6 +29,7 @@
   power_gpoup: (0 - 15) - associate GPIO with POWERx
 
   Commands:
+  MCPSWITCH0  - report all pin configuration
   MCPSWITCHx  - report pin x status
 
   MCPSWITCH   - set configuration
@@ -94,6 +95,10 @@ uint8_t mcp230_switch_type = MCP_TYPE_NONE;
 // 0-7 bits - bank0, 8-15 bits - bank1
 uint16_t mcp230_switch_input_mask = 0;
 
+uint8_t MCPSwitch_readGPIO(uint8_t bank) {
+  return I2cRead8(USE_MCP230xx_ADDR, MCP230family_GPIO + bank);
+}
+
 void MCPSwitch_ApplySettings(void) {
   Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
   mcp230_switch_input_mask = 0;
@@ -107,7 +112,7 @@ void MCPSwitch_ApplySettings(void) {
     uint8_t reg_gpinten = 0;
     // Pullup (not used). You probably need at least an RC filter with strong pullup
     // to avoid interference with mains
-    uint8_t reg_gppu = 0;
+    uint8_t reg_gppu = 0xFF;
 
     for (uint8_t idx = 0; idx < 8; idx++) {
       uint8_t cidx = idx + (mcp_bank * 8);
@@ -197,6 +202,82 @@ void MCPSwitch_Detect(void)
   }
 }
 
+
+enum MCPSwitchCommands {
+  SWI_CMND_MCPSWITCH
+};
+
+const char g_MCPSwitchCommands[] PROGMEM =
+  "MCPSWITCH";
+
+#define MCPSWITCH_CMD_LEN 9
+
+const char* MCPSwitch_GetPinModeText(uint8_t mode) {
+  switch(mode) {
+    case MCP_MODE_FOLLOW: return "NF";
+    case MCP_MODE_FOLLOW_INV: return "FI";
+    case MCP_MODE_TOGGLE: return "TG";
+    case MCP_MODE_FEEDBACK: return "SN";
+    case MCP_MODE_FEEDBACK_INV: return "SI";
+    default: return "??";
+  }
+}
+
+// Print current status
+void MCPSwitch_Status() {
+  Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
+
+  // Use index 0 to display all values
+  int16_t index = XdrvMailbox.index - 1;
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{"));
+
+  for (uint8_t mcp_bank = 0; mcp_bank < mcp230_switch_type; ++mcp_bank) {
+    uint8_t gpio_value = MCPSwitch_readGPIO(mcp_bank);
+
+    // snprintf_P(log_data, sizeof(log_data), PSTR("SWI: Read BANK%d, GPIO=0x%X"),
+    //   mcp_bank, gpio_value);
+    // AddLog(LOG_LEVEL_DEBUG);
+
+    for (uint8_t idx = 0; idx < 8; idx++) {
+      uint8_t cidx = idx + (mcp_bank * 8);
+      // If index is set, skip everything except that index
+      if (index != -1 && index != cidx) {
+        continue;
+      }
+      if (strlen(mqtt_data) > 1) {
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,"), mqtt_data);
+      }
+      uint8_t value = gpio_value & (1 << idx);
+      value = value >> idx;
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s\"p%d\":{\"m\":\"%s\",\"pg\":\"%d\",\"v\":\"%d\"}"),
+        mqtt_data, cidx, MCPSwitch_GetPinModeText(cfg[cidx].pinmode), cfg[cidx].power_gpoup, value);
+    }
+  }
+
+  if (strlen(mqtt_data) > 0) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
+  }
+}
+
+boolean MCPSwitch_Command()
+{
+  char command[CMDSZ];
+  int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic, g_MCPSwitchCommands);
+  if (-1 == command_code) {
+    return false;
+  }
+  snprintf_P(log_data, sizeof(log_data), PSTR("SWI: cmd %s"), XdrvMailbox.topic);
+  AddLog(LOG_LEVEL_DEBUG);
+
+  if (strlen(XdrvMailbox.data) == 0) {
+    MCPSwitch_Status();
+    return true;
+  }
+
+
+  return true;
+}
+
 /*********************************************************************************************\
    Interface
 \*********************************************************************************************/
@@ -214,6 +295,10 @@ boolean Xdrv19(byte function)
     case FUNC_EVERY_SECOND:
       MCPSwitch_Detect();
       break;
+    case FUNC_COMMAND:
+      result = MCPSwitch_Command();
+      break;
+
   }
 
   return result;
