@@ -165,6 +165,16 @@ typedef union {
   };
 } Mcp230xxCfg;
 
+typedef union {
+  uint16_t data;
+  struct {
+    uint16_t pinmode : 3;               // Pin mode
+    uint16_t pullup  : 1;               // enable pullup for input
+    uint16_t unused1 : 8;
+    uint16_t power_gpoup : 4;           // power mode associated with the pin
+  };
+} Mcp23008_switch_cfg;
+
 /*
 struct SYSCFG {
   unsigned long cfg_holder;                // 000 Pre v6 header

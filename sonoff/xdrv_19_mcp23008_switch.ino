@@ -81,6 +81,7 @@ enum MCP_TYPE {
 };
 
 enum MCP_MODE {
+  MCP_MODE_NONE = -1,
   MCP_MODE_FOLLOW = 0,
   MCP_MODE_FOLLOW_INV,
   MCP_MODE_TOGGLE,
@@ -201,11 +202,12 @@ void MCPSwitch_Detect(void)
 
 
 enum MCPSwitchCommands {
-  SWI_CMND_MCPSWITCH
+  SWI_CMND_MCPSWITCH,
+  SWI_CMND_PULLUP
 };
 
 const char g_MCPSwitchCommands[] PROGMEM =
-  "MCPSWITCH";
+  "MCPSWITCH|MCPPULLUP";
 
 #define MCPSWITCH_CMD_LEN 9
 
@@ -218,6 +220,20 @@ const char* MCPSwitch_GetPinModeText(uint8_t mode) {
     case MCP_MODE_FEEDBACK_INV: return "SI";
     default: return "??";
   }
+}
+
+void MCPSwitch_Pullup() {
+  int16_t index = XdrvMailbox.index - 1;
+  if (index < 0 || index > 15) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("index err"));
+    return;
+  }
+  Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
+  if (strlen(XdrvMailbox.data) != 0) {
+    cfg[index].pullup = atoi(XdrvMailbox.data) > 0 ? 1 : 0;
+  }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s"),
+    cfg[index].pullup ? "ON" : "OFF");
 }
 
 // Print current status
@@ -256,6 +272,65 @@ void MCPSwitch_Status() {
   }
 }
 
+uint8_t MCPSwitch_ParsePinMode(char *mode) {
+  if (!strncmp(mode, "FN", 2)) {
+    return MCP_MODE_FOLLOW;
+  } else if (!strncmp(mode, "FI", 2)) {
+    return MCP_MODE_FOLLOW_INV;
+  } else if (!strncmp(mode, "TG", 2)) {
+    return MCP_MODE_TOGGLE;
+  } else if (!strncmp(mode, "SN", 2)) {
+    return MCP_MODE_FEEDBACK;
+  } else if (!strncmp(mode, "SI", 2)) {
+    return MCP_MODE_FEEDBACK_INV;
+  }
+  return MCP_MODE_NONE;
+}
+
+void MCPSwitch_Configure() {
+  char sub_string[XdrvMailbox.data_len + 1];
+
+  uint8_t tokens = 1;
+  for (int i = 0; i < XdrvMailbox.data_len; ++i) {
+    if (XdrvMailbox.data[i] == ',') {
+      ++tokens;
+    }
+  }
+
+  Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
+
+  for (int i = 1; i <= tokens; ++i) {
+    char* pinConfig = subStr(sub_string, XdrvMailbox.data, ",", i);
+    if (!pinConfig) {
+      break;
+    }
+
+    uint8_t pin = 0;
+    uint8_t mode = MCP_MODE_NONE;
+    uint8_t power_group = 0;
+    // Parse `3TG2` of type [pin/d{1,2}][MCP_MODE][power_group]
+    size_t tokenlen = strlen(pinConfig);
+    if (tokenlen == 4 || tokenlen == 5) {
+      pin = *pinConfig - '0';
+      ++pinConfig;
+      if (tokenlen == 5) {
+        pin = (pin * 10) + *pinConfig - '0';
+        ++pinConfig;
+      }
+      mode = MCPSwitch_ParsePinMode(pinConfig);
+      power_group = pinConfig[2] - '0';
+    }
+    if (mode == MCP_MODE_NONE || pin >= 16 || power_group > devices_present) {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("bad pin%d cfg:[%s]"), i, pinConfig);
+      return;
+    }
+    cfg[pin].power_gpoup = power_group;
+    cfg[pin].pinmode = mode;
+  }
+  XdrvMailbox.index = 0;
+  MCPSwitch_Status();
+}
+
 boolean MCPSwitch_Command()
 {
   char command[CMDSZ];
@@ -266,9 +341,19 @@ boolean MCPSwitch_Command()
   snprintf_P(log_data, sizeof(log_data), PSTR("SWI: cmd %s"), XdrvMailbox.topic);
   AddLog(LOG_LEVEL_DEBUG);
 
-  if (strlen(XdrvMailbox.data) == 0) {
-    MCPSwitch_Status();
-    return true;
+  switch(command_code) {
+    case SWI_CMND_MCPSWITCH:
+      if (strlen(XdrvMailbox.data) == 0) {
+        MCPSwitch_Status();
+      } else {
+        MCPSwitch_Configure();
+      }
+    break;
+    case SWI_CMND_PULLUP:
+      MCPSwitch_Pullup();
+    break;
+    default:
+      return false;
   }
   return true;
 }
