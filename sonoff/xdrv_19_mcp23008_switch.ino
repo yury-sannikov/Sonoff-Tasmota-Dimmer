@@ -61,6 +61,8 @@
     Otherwice, it will maintain OFF state until you turn of and then on again.
     This is handy to avoid lights to be on if power failure occurs.
 
+    !! After pullup or configuration change you have to reboot your module
+
 \*********************************************************************************************/
 
 uint8_t MCP230family_IODIR          = 0x00;
@@ -90,6 +92,15 @@ enum MCP_MODE {
   MCP_MODE_FEEDBACK_INV
 };
 
+struct GPIO_STATUS {
+  // Current debounced value of GPIO
+  uint16_t      current;
+  // Last read value. Two consequent (50ms timeout) reads should yield the same value
+  // to update `current`
+  uint16_t      last_reading;
+
+} GPIOStatus;
+
 uint8_t mcp230_switch_type = MCP_TYPE_NONE;
 
 // An input mask. Calculated based on the settings. GPIO read values outside of the mask will be ignored
@@ -100,6 +111,77 @@ power_t mcp230_switch_last_power_state = 0;
 
 uint8_t MCPSwitch_readGPIO(uint8_t bank) {
   return I2cRead8(USE_MCP230xx_ADDR, MCP230family_GPIO + bank);
+}
+
+// Read 8 or 16 bit of GPIO status.
+// Apply input mask to filter out feedback reads
+uint16_t MCPSwitch_readAll() {
+  if (mcp230_switch_type == MCP_TYPE_NONE) {
+    return 0;
+  }
+
+  uint16_t result = MCPSwitch_readGPIO(0);
+  if (mcp230_switch_type == MCP_TYPE_MCP23017) {
+    result = result | ((uint16_t)MCPSwitch_readGPIO(1) << 8);
+  }
+  return result & mcp230_switch_input_mask;
+}
+
+uint16_t MCPSwitch_readAndCompare() {
+  uint16_t value = MCPSwitch_readAll();
+  // Update last reading if it does not match. It should be 2 matching consequent readings to update
+  // current state
+  if (value != GPIOStatus.last_reading) {
+    GPIOStatus.last_reading = value;
+    return 0;
+  }
+  // Do nothing if current = value = last_reading
+  if (value == GPIOStatus.current) {
+    return 0;
+  }
+  // XOR current and value to get only changed bits
+  uint16_t result = value ^ GPIOStatus.current;
+  GPIOStatus.current = value;
+  return result;
+}
+
+// Execute change for pin based on the value
+void MCPSwitch_executeChange(int pin, uint8_t value) {
+  Mcp23008_switch_cfg* cfg = (Mcp23008_switch_cfg*)Settings.mcp230xx_config;
+  int powerGr = cfg[pin].power_gpoup + 1;
+  switch(cfg[pin].pinmode) {
+    case MCP_MODE_FOLLOW:
+      ExecuteCommandPower(powerGr, value ? POWER_ON : POWER_OFF, SRC_SWITCH);
+    break;
+
+    case MCP_MODE_FOLLOW_INV:
+      ExecuteCommandPower(powerGr, value ? POWER_OFF : POWER_ON, SRC_SWITCH);
+    break;
+
+    case MCP_MODE_TOGGLE:
+      ExecuteCommandPower(powerGr, POWER_TOGGLE, SRC_SWITCH);
+    break;
+  }
+}
+
+void MCPSwitch_PoolGPIO() {
+  uint16_t updated_bits = MCPSwitch_readAndCompare();
+  if (updated_bits == 0) {
+    return;
+  }
+  snprintf_P(log_data, sizeof(log_data), PSTR("SWI: Change detected: current=0x%X, updates=0x%X"), GPIOStatus.current, updated_bits);
+  AddLog(LOG_LEVEL_DEBUG_MORE);
+  int pin = 0;
+  uint16_t value = GPIOStatus.current;
+  while (updated_bits) {
+    if (updated_bits & 1) {
+      MCPSwitch_executeChange(pin, value & 1);
+    }
+    updated_bits >>= 1;
+    value >>= 1;
+    ++pin;
+  }
+
 }
 
 void MCPSwitch_ApplySettings(void) {
@@ -198,6 +280,7 @@ void MCPSwitch_Detect(void)
     }
   }
   mcp230_switch_last_power_state = power;
+  GPIOStatus.current = GPIOStatus.last_reading = MCPSwitch_readAll();
 }
 
 
@@ -419,6 +502,9 @@ boolean Xdrv19(byte function)
       break;
     case FUNC_EVERY_100_MSECOND:
       MCPSwitch_SyncPower();
+      break;
+    case FUNC_EVERY_50_MSECOND:
+      MCPSwitch_PoolGPIO();
       break;
   }
   return result;
