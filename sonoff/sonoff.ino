@@ -2443,6 +2443,7 @@ void GpioInit()
 #ifdef USE_I2C
   i2c_flg = ((pin[GPIO_I2C_SCL] < 99) && (pin[GPIO_I2C_SDA] < 99));
   if (i2c_flg) Wire.begin(pin[GPIO_I2C_SDA], pin[GPIO_I2C_SCL]);
+  //Wire.setClock(25000L);
 #endif  // USE_I2C
 
   devices_present = 1;
