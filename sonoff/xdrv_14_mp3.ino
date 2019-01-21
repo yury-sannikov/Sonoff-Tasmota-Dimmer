@@ -180,7 +180,7 @@ void MP3_CMD(uint8_t mp3cmd,uint16_t val) {
 
 boolean MP3PlayerCmd(void) {
   char command[CMDSZ];
-  boolean serviced = true;
+  boolean serviced = false;
   uint8_t disp_len = strlen(D_CMND_MP3);
 
   if (!strncasecmp_P(XdrvMailbox.topic, PSTR(D_CMND_MP3), disp_len)) {  // prefix
