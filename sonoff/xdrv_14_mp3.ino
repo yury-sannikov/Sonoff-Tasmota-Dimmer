@@ -67,6 +67,8 @@
  * https://www.dfrobot.com/wiki/index.php/DFPlayer_Mini_SKU:DFR0299
 \*********************************************************************************************/
 
+#define XDRV_14             14
+
 #include <TasmotaSerial.h>
 
 TasmotaSerial *MP3Player;
@@ -224,19 +226,19 @@ boolean MP3PlayerCmd(void) {
  * Interface
 \*********************************************************************************************/
 
-#define XDRV_14
-
 boolean Xdrv14(byte function)
 {
   boolean result = false;
 
-  switch (function) {
-    case FUNC_PRE_INIT:
-      MP3PlayerInit();                              // init and start communication
-      break;
-    case FUNC_COMMAND:
-      result = MP3PlayerCmd();                      // return result from mp3 player command
-      break;
+  if (pin[GPIO_MP3_DFR562] < 99) {
+    switch (function) {
+      case FUNC_PRE_INIT:
+        MP3PlayerInit();                              // init and start communication
+        break;
+      case FUNC_COMMAND:
+        result = MP3PlayerCmd();                      // return result from mp3 player command
+        break;
+    }
   }
   return result;
 }
