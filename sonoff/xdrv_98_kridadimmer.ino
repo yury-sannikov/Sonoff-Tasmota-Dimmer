@@ -406,10 +406,10 @@ void leakToFullOn() {
  * Interface
 \*********************************************************************************************/
 
-#define XDRV_18
+#define XDRV_98
 boolean skip_50 = true;
 
-boolean Xdrv18(byte function)
+boolean Xdrv98(byte function)
 {
   boolean result = false;
 

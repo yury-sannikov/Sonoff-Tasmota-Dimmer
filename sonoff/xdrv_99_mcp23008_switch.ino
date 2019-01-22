@@ -1,5 +1,5 @@
 #ifdef USE_I2C
-
+#ifdef USE_MCP230xx_SWITCH
 /*********************************************************************************************\
    MCP23008 - I2C GPIO Switch
    This module is intened to utilize MCP23008 with wall swithes to controll lights. The idea to make
@@ -30,6 +30,8 @@
 
   Commands:
   MCPSWITCH0  - report all pin configuration
+  Example:
+   {"p0":{"m":"FN","pg":"0","v":"1"},"p1":{"m":"SI","pg":"0","v":"1"},"p2":{"m":"SI","pg":"1","v":"1"},"p3":{"m":"SI","pg":"2","v":"1"},"p4":{"m":"FN","pg":"0","v":"1"},"p5":{"m":"FN","pg":"0","v":"1"},"p6":{"m":"FN","pg":"0","v":"1"},"p7":{"m":"FI","pg":"2","v":"1"}}
   MCPSWITCHx  - report pin x status
 
   MCPSWITCH   - set configuration
@@ -37,6 +39,8 @@
   Set command format:
   [pin][pinmode opcode][power_group]
   MCPSWITCH   0FN0,1FN1,2TG2,3TG2,4TG2,5SN0,6SN1,7SN2
+  MCPSWITCH   0FN0,1SI0,2SI1,3SI2,4FN0,5FN0,6FN0,7FI2
+
     pin 0, FN - follow normal mode, POWER GROUP 0
     pin 1, FN - follow normal mode, POWER GROUP 1
     pin 2, TG - toggle mode,        POWER GROUP 2
@@ -484,8 +488,8 @@ void MCPSwitch_SyncPower() {
    Interface
 \*********************************************************************************************/
 
-#define XDRV_19
-boolean Xdrv19(byte function)
+#define XDRV_99
+boolean Xdrv99(byte function)
 {
   boolean result = false;
 
@@ -510,4 +514,5 @@ boolean Xdrv19(byte function)
   return result;
 }
 
-#endif
+#endif // USE_MCP230xx_SWITCH
+#endif // USE_I2C
