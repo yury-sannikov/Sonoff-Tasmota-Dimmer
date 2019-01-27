@@ -173,6 +173,19 @@ typedef union {
   };
 } Mcp23008_switch_cfg;
 
+typedef struct {
+  uint16_t hdr_magic;                     // header magic should match defined value, or will be defaulted
+  union {
+    uint16_t data;
+    struct {
+      uint16_t freq           : 11;              // PCA9685 frequency. Default to USE_PCA9685_DIMMER_FREQ
+      uint16_t inv_out        : 1;               // Output is inverted. Mode register 2 INVRT flag
+      uint16_t totem_out      : 1;               // 1 -  outputs are configured with a totem pole, 0 - open-drain. Mode register 2 OUTDRV flag
+    };
+  } cfg;
+
+} PCA9685_dimmer_cfg;
+
 /*
 struct SYSCFG {
   unsigned long cfg_holder;                // 000 Pre v6 header
@@ -347,6 +360,7 @@ struct SYSCFG {
   char          mems[MAX_RULE_MEMS][10];   // 7CE
   char          rules[MAX_RULE_SETS][MAX_RULE_SIZE]; // 800 uses 512 bytes in v5.12.0m, 3 x 512 bytes in v5.14.0b
                                            // E00 - FFF free locations
+  PCA9685_dimmer_cfg    pca685_dimmer;
 } Settings;
 
 struct RTCRBT {
