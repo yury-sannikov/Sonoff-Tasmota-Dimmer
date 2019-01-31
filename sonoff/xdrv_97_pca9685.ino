@@ -15,6 +15,9 @@
 #define PCA9685_BIT_INVRT_POS              4
 #define PCA9685_BIT_OUTDRV_POS             2
 
+#define PCA9685_DIMMER_CHANNELS            16
+
+#define PCA9685_DIMMER_I2C_BUFFERS         3
 
 #ifndef USE_PCA9685_DIMMER_FREQ
   #define USE_PCA9685_DIMMER_FREQ 1000
@@ -43,111 +46,82 @@ enum PCA9685_BOOT_EVENT {
 uint8_t PCA9685Dimmer_boot_events = PCA9685_BOOT_NONE;
 
 uint8_t PCA9685Dimmer_detected = 0;
+uint32_t PCA9685Dimmer_twi_errors = 0;
 
 
-//DEL IT! uint16_t PCA9685Dimmer_freq = USE_PCA9685_DIMMER_FREQ;
-// uint16_t PCA9685Dimmer_pin_pwm_value[16];
+struct I2C_Bucket_t {
+  // start bit position, 0..15
+  uint8_t   pos:4;
+  // bucket size: 0..7
+  uint8_t   len:3;
+  uint8_t   unused:1;
+};
+
+// Max 3 I2C buckets: 7 + 7 + 2
+typedef struct I2C_Bucket_t I2C_Bucket_Array[PCA9685_DIMMER_I2C_BUFFERS];
+
+typedef struct {
+  // Current dimmer value phase shift
+  uint16_t   m_shift;
+  // Current dimmer value
+  uint16_t   m_value;
+  // Current dimmer value target
+  uint16_t   m_target;
+  // Curent velocity of m_value change
+  uint8_t    m_velocity;
+} PCA9685Dimmer_Channel;
+
+// A low-level data structure used by 50ms timer to update PCA9685 PWM registers and
+// perform dimming/color transitions
+struct {
+  // A bit mask of channels in fade transition. Do not update directly, use . instead
+  uint16_t                m_acting;
+  // An I2C buckets array created from m_acting value
+  I2C_Bucket_Array        m_buckets;
+  // Channel information
+  PCA9685Dimmer_Channel   m_channel[PCA9685_DIMMER_CHANNELS];
+} PCA9685Dimmer_Channels;
+
+/////////////// Acting & Buckets handling
+#define SEQUENCE_LENGTH(channels, start, mask) ((sizeof(int) * 8) - __builtin_clz(channels & ~mask) - start)
+
+void PCA9685Dimmer_makeBuckets(struct I2C_Bucket_t* buckets, uint16_t channels) {
+  memset(buckets, 0, sizeof(I2C_Bucket_Array));
+
+  for (int i = 0; channels && i < PCA9685_DIMMER_I2C_BUFFERS; ++i) {
+    int start = __builtin_ffs(channels) - 1;
+    int len = SEQUENCE_LENGTH(channels, start, 0);
+    // Mask high order bits until whole sequence fits into max 7 len bucket
+    // lengt might be significantly below 7
+    int16_t mask = 0x8000;
+    while (len >= 8) {
+      len = SEQUENCE_LENGTH(channels, start, mask);
+      mask |= mask >> 1;
+    }
+    buckets[i].pos = start;
+    buckets[i].len = len;
+    // mask bucketed bits
+    mask = (1ul << (start + len)) - 1;
+    channels &= ~mask;
+  }
+}
+
+void PCA9685Dimmer_updateActing(uint16_t acting) {
+  PCA9685Dimmer_makeBuckets(PCA9685Dimmer_Channels.m_buckets, acting);
+  PCA9685Dimmer_Channels.m_acting = acting;
+}
 
 
-
-// void PCA9685Dimmer_SetPWM_Reg(uint8_t pin, uint16_t on, uint16_t off) {
-//   uint8_t led_reg = PCA9685Dimmer_REG_LED0_ON_L + 4 * pin;
-//   uint32_t led_data = 0;
-//   I2cWrite8(USE_PCA9685_DIMMER_ADDR, led_reg, on);
-//   I2cWrite8(USE_PCA9685_DIMMER_ADDR, led_reg+1, (on >> 8));
-//   I2cWrite8(USE_PCA9685_DIMMER_ADDR, led_reg+2, off);
-//   I2cWrite8(USE_PCA9685_DIMMER_ADDR, led_reg+3, (off >> 8));
-// }
-
-// void PCA9685Dimmer_SetPWM(uint8_t pin, uint16_t pwm, bool inverted) {
-//   if (4096 == pwm) {
-//     PCA9685Dimmer_SetPWM_Reg(pin, 4096, 0); // Special use additional bit causes channel to turn on completely without PWM
-//   } else {
-//     PCA9685Dimmer_SetPWM_Reg(pin, 0, pwm);
-//   }
-//   PCA9685Dimmer_pin_pwm_value[pin] = pwm;
-// }
-
-// bool PCA9685Dimmer_Command(void)
-// {
-//   boolean serviced = true;
-//   boolean validpin = false;
-//   uint8_t paramcount = 0;
-//   if (XdrvMailbox.data_len > 0) {
-//     paramcount=1;
-//   } else {
-//     serviced = false;
-//     return serviced;
-//   }
-//   char sub_string[XdrvMailbox.data_len];
-//   for (uint8_t ca=0;ca<XdrvMailbox.data_len;ca++) {
-//     if ((' ' == XdrvMailbox.data[ca]) || ('=' == XdrvMailbox.data[ca])) { XdrvMailbox.data[ca] = ','; }
-//     if (',' == XdrvMailbox.data[ca]) { paramcount++; }
-//   }
-//   UpperCase(XdrvMailbox.data,XdrvMailbox.data);
-
-//   if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 1),"RESET"))  {  PCA9685Dimmer_Reset(); return serviced; }
-
-//   if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 1),"STATUS"))  { PCA9685Dimmer_OutputTelemetry(false); return serviced; }
-
-//   if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 1),"PWMF")) {
-//     if (paramcount > 1) {
-//       uint16_t new_freq = atoi(subStr(sub_string, XdrvMailbox.data, ",", 2));
-//       if ((new_freq >= 24) && (new_freq <= 1526)) {
-//         PCA9685Dimmer_SetPWMfreq(new_freq);
-//         snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"PWMF\":%i, \"Result\":\"OK\"}}"),new_freq);
-//         return serviced;
-//       }
-//     } else { // No parameter was given for setfreq, so we return current setting
-//       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"PWMF\":%i}}"),PCA9685Dimmer_freq);
-//       return serviced;
-//     }
-//   }
-//   if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 1),"PWM")) {
-//     if (paramcount > 1) {
-//       uint8_t pin = atoi(subStr(sub_string, XdrvMailbox.data, ",", 2));
-//       if (paramcount > 2) {
-//         if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 3), "ON")) {
-//           PCA9685Dimmer_SetPWM(pin, 4096, false);
-//           snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"PIN\":%i,\"PWM\":%i}}"),pin,4096);
-//           serviced = true;
-//           return serviced;
-//         }
-//         if (!strcmp(subStr(sub_string, XdrvMailbox.data, ",", 3), "OFF")) {
-//           PCA9685Dimmer_SetPWM(pin, 0, false);
-//           snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"PIN\":%i,\"PWM\":%i}}"),pin,0);
-//           serviced = true;
-//           return serviced;
-//         }
-//         uint16_t pwm = atoi(subStr(sub_string, XdrvMailbox.data, ",", 3));
-//         if ((pin >= 0 && pin <= 15) && (pwm >= 0 && pwm <= 4096)) {
-//           PCA9685Dimmer_SetPWM(pin, pwm, false);
-//           snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"PIN\":%i,\"PWM\":%i}}"),pin,pwm);
-//           serviced = true;
-//           return serviced;
-//         }
-//       }
-//     }
-//   }
-//   return serviced;
-// }
-
-// void PCA9685Dimmer_OutputTelemetry(bool telemetry) {
-//   if (0 == PCA9685Dimmer_detected) { return; }  // We do not do this if the PCA9685 has not been detected
-//   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"" D_JSON_TIME "\":\"%s\",\"PCA9685\": {"), GetDateAndTime(DT_LOCAL).c_str());
-//   snprintf_P(mqtt_data,sizeof(mqtt_data), PSTR("%s\"PWM_FREQ\":%i,"),mqtt_data,PCA9685Dimmer_freq);
-//   for (uint8_t pin=0;pin<16;pin++) {
-//     snprintf_P(mqtt_data,sizeof(mqtt_data), PSTR("%s\"PWM%i\":%i,"),mqtt_data,pin,PCA9685Dimmer_pin_pwm_value[pin]);
-//   }
-//   snprintf_P(mqtt_data,sizeof(mqtt_data),PSTR("%s\"END\":1}}"),mqtt_data);
-//   if (telemetry) {
-//     MqttPublishPrefixTopic_P(TELE, PSTR(D_RSLT_SENSOR), Settings.flag.mqtt_sensor_retain);
-//   }
-// }
 
 void PCA9685Dimmer_InitDevices(void) {
   devices_present = 1;
   light_type = LT_BASIC;
+
+  // Turn off all channels
+  memset(&PCA9685Dimmer_Channels, 0, sizeof(PCA9685Dimmer_Channels));
+
+  // Next 50ms cycle PCA9685 will be updated with zero values
+  PCA9685Dimmer_updateActing(0xFFFF);
 
 }
 
@@ -167,6 +141,7 @@ bool PCA9685Dimmer_Detect(void)
         snprintf_P(log_data, sizeof(log_data), S_LOG_I2C_FOUND_AT, "PCA9685", USE_PCA9685_DIMMER_ADDR);
         AddLog(LOG_LEVEL_DEBUG);
         PCA9685Dimmer_Reset(); // Reset the controller
+        PCA9685Dimmer_InitDevices();
         return true;
       }
     }
@@ -176,10 +151,16 @@ bool PCA9685Dimmer_Detect(void)
 
 void PCA9685Dimmer_Reset(void)
 {
-  uint8_t mode1 = 0x80;
+  // 0x80 - reset
+  // 0x20 - enable register autoincrement
+  uint8_t mode1 = 0xA0;
   I2cWrite8(USE_PCA9685_DIMMER_ADDR, PCA9685_DIMMER_REG_MODE1, mode1);
 
   uint8_t mode2 = I2cRead8(USE_PCA9685_DIMMER_ADDR, PCA9685_DIMMER_REG_MODE2);
+
+  // Clear OCH bit causing outputs change on STOP command
+  mode2 &= ~(1 << 3);
+
   // Clear & set INVRT bit
   mode2 &= ~(1 << PCA9685_BIT_INVRT_POS);
   if (Settings.pca685_dimmer.cfg.inv_out) {
@@ -194,10 +175,7 @@ void PCA9685Dimmer_Reset(void)
   I2cWrite8(USE_PCA9685_DIMMER_ADDR, PCA9685_DIMMER_REG_MODE2, mode2);
 
   PCA9685Dimmer_SetPWMfreq(Settings.pca685_dimmer.cfg.freq);
-  // for (uint8_t pin=0;pin<16;pin++) {
-  //   PCA9685Dimmer_SetPWM(pin,0,false);
-  //   PCA9685Dimmer_pin_pwm_value[pin] = 0;
-  // }
+
   snprintf_P(log_data, sizeof(mqtt_data), PSTR("{\"PCA9685\":{\"RESET\":\"OK\",\"mode1\":%d,\"mode2\":%d}}"), mode1, mode2);
   AddLog(LOG_LEVEL_DEBUG);
 
@@ -266,6 +244,93 @@ void PCA9685Dimmer_LogBootEvents(void) {
   PCA9685Dimmer_boot_events = PCA9685_BOOT_NONE;
 }
 
+//////////////////////////////////////////////////////////////////////
+////////////////////////// Low level dimming /////////////////////////
+//////////////////////////////////////////////////////////////////////
+
+boolean PCA9685Dimmer_Advance(void) {
+  // Do nothing if none of the channels should be updated
+  if (PCA9685Dimmer_Channels.m_acting == 0) {
+    return false;
+  }
+
+  // Update acting bits & advance dimmers
+  uint16_t acting = 0;
+  for (int i = 0; i < PCA9685_DIMMER_CHANNELS; ++i) {
+    PCA9685Dimmer_Channel* ch = &PCA9685Dimmer_Channels.m_channel[i];
+    // If value match target, do nothing
+    if (ch->m_value == ch->m_target) {
+      continue;
+    }
+
+    // If velocity value is zero (and values does not match), set value to target
+    if (ch->m_velocity == 0) {
+      ch->m_value = ch->m_target;
+    } else {
+      // Get diff between current value and target value
+      int32_t diff = (int32_t)ch->m_value - (int32_t)ch->m_target;
+      int32_t delta = ch->m_velocity;
+      // If diff between target and value is less-eq that delta, update value to the target
+      if (abs(diff) <= delta) {
+        ch->m_value = ch->m_target;
+      } else {
+        // A case, where value far from target. Move value toward the target
+        ch->m_value = diff > 0 ? ch->m_value - delta : ch->m_value + delta;
+        // Set acting bit in the position
+        acting |= (1 << i);
+      }
+    }
+  }
+
+
+  // Update PCA9685 values using buckets to avoid 32 byte I2C buffer limit
+  for (int bucket = 0; bucket < PCA9685_DIMMER_I2C_BUFFERS; ++bucket) {
+    if (PCA9685Dimmer_Channels.m_buckets[bucket].len == 0) {
+      break;
+    }
+
+    int pos =  PCA9685Dimmer_Channels.m_buckets[bucket].pos;
+    int len =  PCA9685Dimmer_Channels.m_buckets[bucket].len;
+    // Start transmission
+    Wire.beginTransmission((uint8_t)USE_PCA9685_DIMMER_ADDR);
+    // Select start address based on a bucket start
+    Wire.write(PCA9685_DIMMER_REG_LED0_ON_L + (pos * 4));
+
+    // Mode1 AI flag should be enabled
+    for (int i = pos; i < (pos + len); ++i) {
+      uint16_t value = PCA9685Dimmer_Channels.m_channel[i].m_value;
+      uint16_t start = PCA9685Dimmer_Channels.m_channel[i].m_shift;
+
+      if (value >= 0x1000) {
+        // Special case, turn on, no PWM
+        value = 0;
+        start = 0x1000;
+      } else if (value == 0) {
+        // Special case, turn off, no PWM
+        value = 0x1000;
+        start = 0;
+      } else {
+        value += start;
+        if (value >= 0x1000) {
+          value &= 0xFFF;
+        }
+      }
+
+      Wire.write(start);
+      Wire.write((start >> 8));
+      Wire.write(value);
+      Wire.write((value >> 8));
+    }
+    // Send stop signal
+    if (Wire.endTransmission(true) != 0) {
+      ++PCA9685Dimmer_twi_errors;
+    }
+  }
+
+  PCA9685Dimmer_updateActing(acting);
+
+  return true;
+}
 
 //////////////////////////////////////////////////////////////////////
 ////////////////////////// Command handling //////////////////////////
@@ -273,13 +338,18 @@ void PCA9685Dimmer_LogBootEvents(void) {
 
 enum PCA9685Dimmer_Commands {
   // Set or retrieve PCA9685 settings
-  PCA9685_CMND_SETUP
+  PCA9685_CMND_SETUP,
+  // get/set raw value for the channel
+  PCA9685_CMND_RAW
 };
 
 const char g_PCA9685Dimmer_Commands[] PROGMEM =
-  "P9SETUP";
+  "P9SETUP|P9RAW";
 
 boolean PCA9685Dimmer_CheckParamCount(uint16_t count) {
+  if (XdrvMailbox.data_len == 0) {
+    return count == 0;
+  }
   char *q = XdrvMailbox.data;
   for (; *q; count -= (*q++ == ','));
   return count == 1;
@@ -314,6 +384,37 @@ void PCA9685Dimmer_CommandSetup(void) {
   PCA9685Dimmer_CommandSetupPrint();
 }
 
+void PCA9685Dimmer_CommandRaw(boolean isGet) {
+  if (XdrvMailbox.index >= PCA9685_DIMMER_CHANNELS) {
+    // Index OOB
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR(D_JSON_ERROR));
+    return;
+  }
+
+  if (!isGet) {
+    if (!PCA9685Dimmer_CheckParamCount(1)) {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR(D_JSON_ERROR));
+      return;
+    }
+    char sub_string[XdrvMailbox.data_len + 1];
+    char* val = subStr(sub_string, XdrvMailbox.data, ",", 1);
+
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_shift = 0;
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_target = atoi(val);
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_velocity = 32;
+
+    // Update PWM on the next 50ms cycle
+    PCA9685Dimmer_updateActing(1 << XdrvMailbox.index);
+  }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"shift\":%d,\"value\":%d,\"target\":%d,\"velocity\":%d}"),
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_shift,
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_value,
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_target,
+    PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_velocity
+  );
+
+}
+
 
 boolean PCA9685Dimmer_Command(void)
 {
@@ -327,17 +428,37 @@ boolean PCA9685Dimmer_Command(void)
 
   switch(command_code) {
     case PCA9685_CMND_SETUP:
-      if (strlen(XdrvMailbox.data) == 0) {
+      if (XdrvMailbox.data_len == 0) {
         PCA9685Dimmer_CommandSetupPrint();
       } else {
         PCA9685Dimmer_CommandSetup();
       }
+      return true;
+    case PCA9685_CMND_RAW:
+      PCA9685Dimmer_CommandRaw(XdrvMailbox.data_len == 0);
       return true;
     default:
       return false;
   }
   return false;
 }
+
+void PCA9685Dimmer_OutputTelemetry() {
+  if (0 == PCA9685Dimmer_detected) {
+    return;
+  }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"" D_JSON_TIME "\":\"%s\",\"PCA9685Dimmer\": {"), GetDateAndTime(DT_LOCAL).c_str());
+  snprintf_P(mqtt_data,sizeof(mqtt_data), PSTR("%s\"FREQ\":%d,\"INVRT\":%d,\"OUTDRV\":%s,\"BEVT\":%d,\"I2C_ERR\":%d}"),
+    mqtt_data,
+    Settings.pca685_dimmer.cfg.freq,
+    Settings.pca685_dimmer.cfg.inv_out,
+    (Settings.pca685_dimmer.cfg.totem_out ? "TOTEM" : "ODRAIN"),
+    PCA9685Dimmer_boot_events,
+    PCA9685Dimmer_twi_errors
+  );
+  MqttPublishPrefixTopic_P(TELE, PSTR(D_RSLT_SENSOR), Settings.flag.mqtt_sensor_retain);
+}
+
 
 #define XDRV_97                     97
 boolean Xdrv97(byte function)
@@ -363,7 +484,6 @@ boolean Xdrv97(byte function)
       if (init_attempts == 0) {
         PCA9685Dimmer_boot_events |= PCA9685_BOOT_FAIL;
       }
-      PCA9685Dimmer_InitDevices();
       result = true;
       break;
 
@@ -371,13 +491,22 @@ boolean Xdrv97(byte function)
       PCA9685Dimmer_LogBootEvents();
       if (!PCA9685Dimmer_detected) {
         PCA9685Dimmer_Detect();
-        PCA9685Dimmer_InitDevices();
         snprintf_P(log_data, sizeof(log_data), PSTR("PCA9685: Delayed init success"));
+        AddLog(LOG_LEVEL_DEBUG);
       }
+      if (tele_period == 0) {
+        PCA9685Dimmer_OutputTelemetry();
+      }
+
       break;
     case FUNC_COMMAND:
       result = PCA9685Dimmer_Command();
       break;
+    case FUNC_EVERY_50_MSECOND: {
+      PCA9685Dimmer_Advance();
+      break;
+
+    }
     default:
       break;
   }
