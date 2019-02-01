@@ -202,7 +202,7 @@ void PCA9685Dimmer_SetPWMfreq(uint16_t freq) {
   I2cWrite8(USE_PCA9685_DIMMER_ADDR, PCA9685_DIMMER_REG_MODE1, current_mode1 | 0xA0); // Reset MODE1 register to original state and enable auto increment
 }
 
-#define SETTINGS_MAGIC 0xA0DE
+#define SETTINGS_MAGIC 0xA0DF
 
 void PCA9685Dimmer_CheckSettings (void) {
   uint16_t freq = Settings.pca685_dimmer.cfg.freq;
@@ -340,19 +340,25 @@ enum PCA9685Dimmer_Commands {
   // Set or retrieve PCA9685 settings
   PCA9685_CMND_SETUP,
   // get/set raw value for the channel
-  PCA9685_CMND_RAW
+  PCA9685_CMND_RAW,
+  // get/set lamps configuration
+  PCA9685_CMND_LAMP
 };
 
 const char g_PCA9685Dimmer_Commands[] PROGMEM =
-  "P9SETUP|P9RAW";
+  "P9SETUP|P9RAW|P9LAMP";
+
+int PCA9685Dimmer_GetParamCount(char* q, char delim) {
+  int count = 1;
+  for (; *q; count += (*q++ == delim));
+  return count;
+}
 
 boolean PCA9685Dimmer_CheckParamCount(uint16_t count) {
   if (XdrvMailbox.data_len == 0) {
-    return count == 0;
+    return 0;
   }
-  char *q = XdrvMailbox.data;
-  for (; *q; count -= (*q++ == ','));
-  return count == 1;
+  return count == PCA9685Dimmer_GetParamCount(XdrvMailbox.data, ',');
 }
 
 
@@ -415,6 +421,132 @@ void PCA9685Dimmer_CommandRaw(boolean isGet) {
 
 }
 
+void PCA9685Dimmer_CommandLamp_Print(void) {
+  if (Settings.pca685_dimmer.lamps[0].type == PCA9685_LAMP_NONE) {
+    return;
+  }
+  mqtt_data[0] = 0;
+
+  for (int i = 0; i < 16; ++i) {
+    if (Settings.pca685_dimmer.lamps[i].type == PCA9685_LAMP_NONE) {
+      break;
+    }
+    if (strlen(mqtt_data) > 0) {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,"), mqtt_data);
+    }
+    uint16_t velocityMs = Settings.pca685_dimmer.lamps[i].velocity * 50;
+
+    switch (Settings.pca685_dimmer.lamps[i].type)
+    {
+      case PCA9685_LAMP_SINGLE:
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sS=%d&V=%d"), mqtt_data,
+          Settings.pca685_dimmer.lamps[i].pins.ch0,
+          velocityMs);
+        break;
+      case PCA9685_LAMP_MULTIWHITE:
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sMW=%d:%d&KW=%d&KC=%d&V=%d"), mqtt_data,
+          Settings.pca685_dimmer.lamps[i].pins.ch0,
+          Settings.pca685_dimmer.lamps[i].pins.ch1,
+          Settings.pca685_dimmer.lamps[i].warm_temp * 100,
+          Settings.pca685_dimmer.lamps[i].cold_temp * 100,
+          velocityMs);
+        break;
+      case PCA9685_LAMP_RGB:
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sRGB=%d:%d:%d&V=%d"), mqtt_data,
+          Settings.pca685_dimmer.lamps[i].pins.ch0,
+          Settings.pca685_dimmer.lamps[i].pins.ch1,
+          Settings.pca685_dimmer.lamps[i].pins.ch2,
+          velocityMs);
+        break;
+      case PCA9685_LAMP_RGBW:
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sRGBW=%d:%d:%d:%d&V=%d"), mqtt_data,
+          Settings.pca685_dimmer.lamps[i].pins.ch0,
+          Settings.pca685_dimmer.lamps[i].pins.ch1,
+          Settings.pca685_dimmer.lamps[i].pins.ch2,
+          Settings.pca685_dimmer.lamps[i].pins.ch3,
+          velocityMs);
+        break;
+      case PCA9685_LAMP_RGBWW:
+        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sRGBWW=%d:%d:%d:%d:%d&KW=%d&KC=%d&V=%d"), mqtt_data,
+          Settings.pca685_dimmer.lamps[i].pins.ch0,
+          Settings.pca685_dimmer.lamps[i].pins.ch1,
+          Settings.pca685_dimmer.lamps[i].pins.ch2,
+          Settings.pca685_dimmer.lamps[i].pins.ch3,
+          Settings.pca685_dimmer.lamps[i].pins.ch4,
+          Settings.pca685_dimmer.lamps[i].warm_temp * 100,
+          Settings.pca685_dimmer.lamps[i].cold_temp * 100,
+          velocityMs);
+        break;
+      default:
+        break;
+    }
+  }
+  if (strlen(mqtt_data) == 0) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("Empty"));
+  }
+}
+
+
+void PCA9685Dimmer_CommandLamp_SetPins(PCA9685_dimmer_lamp* lamp, char* value) {
+  char buff[strlen(value) + 1];
+  int params = PCA9685Dimmer_GetParamCount(value, ':');
+  uint32_t channels = 0;
+  for(int i = 0; i < params; ++i) {
+    char* pinStr = subStr(buff, value, ":", i + 1);
+    uint8_t val = atoi(pinStr) & 0xF;
+    channels |= (val << (i * 4));
+  }
+  lamp->pins.data = channels;
+}
+
+void PCA9685Dimmer_CommandLamp_Set(void) {
+  memset(Settings.pca685_dimmer.lamps, 0, sizeof(PCA9685_dimmer_lamp) * 16);
+  int lamps = PCA9685Dimmer_GetParamCount(XdrvMailbox.data, ',');
+  if (lamps > 16) {
+    return;
+  }
+
+  for(int lamp = 0; lamp < lamps; ++lamp) {
+    char sub_string[XdrvMailbox.data_len + 1];
+    char* lampStr = subStr(sub_string, XdrvMailbox.data, ",", lamp + 1);
+    int params = PCA9685Dimmer_GetParamCount(lampStr, '&');
+
+    // parse lamp
+    for(int lampParam = 0; lampParam < params; ++lampParam) {
+      char paramStr_buff[strlen(lampStr) + 1];
+      char* paramStr = subStr(paramStr_buff, lampStr, "&", lampParam + 1);
+      // Parse key-value
+      char kv_buff[strlen(paramStr) + 1];
+      char* keyStr = subStr(kv_buff, paramStr, "=", 1);
+      char* valueStr = subStr(kv_buff, paramStr, "=", 2);
+
+      if (!strncmp(keyStr, "S", 1)) {
+        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_SINGLE;
+        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
+      } else if (!strncmp(keyStr, "MW", 2)) {
+        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_MULTIWHITE;
+        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
+      } else if (!strncmp(keyStr, "RGBWW", 5)) {
+        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_RGBWW;
+        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
+      } else if (!strncmp(keyStr, "RGBW", 4)) {
+        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_RGBW;
+        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
+      } else if (!strncmp(keyStr, "RGB", 3)) {
+        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_RGB;
+        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
+      } else if (!strncmp(keyStr, "KW", 2)) {
+        Settings.pca685_dimmer.lamps[lamp].warm_temp = atoi(valueStr) / 100;
+      } else if (!strncmp(keyStr, "KC", 2)) {
+        Settings.pca685_dimmer.lamps[lamp].cold_temp = atoi(valueStr) / 100;
+      } else if (!strncmp(keyStr, "V", 1)) {
+        Settings.pca685_dimmer.lamps[lamp].velocity = atoi(valueStr) / 50;
+      }
+    }
+  }
+
+  PCA9685Dimmer_CommandLamp_Print();
+}
 
 boolean PCA9685Dimmer_Command(void)
 {
@@ -436,6 +568,13 @@ boolean PCA9685Dimmer_Command(void)
       return true;
     case PCA9685_CMND_RAW:
       PCA9685Dimmer_CommandRaw(XdrvMailbox.data_len == 0);
+      return true;
+    case PCA9685_CMND_LAMP:
+      if (XdrvMailbox.data_len == 0) {
+        PCA9685Dimmer_CommandLamp_Print();
+      } else {
+        PCA9685Dimmer_CommandLamp_Set();
+      }
       return true;
     default:
       return false;
@@ -515,3 +654,84 @@ boolean Xdrv97(byte function)
 
 #endif // USE_PCA9685_DIMMER
 #endif // USE_IC2
+
+
+/*
+
+////////////////////////////////////////////////////////////////////////////////////
+
+
+
+//Get the maximum between R, G, and B
+float tM = Math.Max(Ri, Math.Max(Gi, Bi));
+
+//If the maximum value is 0, immediately return pure black.
+if(tM == 0)
+   { return new rgbwcolor() { r = 0, g = 0, b = 0, w = 0 }; }
+
+//This section serves to figure out what the color with 100% hue is
+float multiplier = 255.0f / tM;
+float hR = Ri * multiplier;
+float hG = Gi * multiplier;
+float hB = Bi * multiplier;
+
+//This calculates the Whiteness (not strictly speaking Luminance) of the color
+float M = Math.Max(hR, Math.Max(hG, hB));
+float m = Math.Min(hR, Math.Min(hG, hB));
+float Luminance = ((M + m) / 2.0f - 127.5f) * (255.0f/127.5f) / multiplier;
+
+//Calculate the output values
+int Wo = Convert.ToInt32(Luminance);
+int Bo = Convert.ToInt32(Bi - Luminance);
+int Ro = Convert.ToInt32(Ri - Luminance);
+int Go = Convert.ToInt32(Gi - Luminance);
+
+//Trim them so that they are all between 0 and 255
+if (Wo < 0) Wo = 0;
+if (Bo < 0) Bo = 0;
+if (Ro < 0) Ro = 0;
+if (Go < 0) Go = 0;
+if (Wo > 255) Wo = 255;
+if (Bo > 255) Bo = 255;
+if (Ro > 255) Ro = 255;
+if (Go > 255) Go = 255;
+return new rgbwcolor() { r = Ro, g = Go, b = Bo, w = Wo };
+
+////////////////////////////////////////////////////////////////////////////////////
+RGB to color temperature
+
+
+  import numpy as np
+  import colour
+
+  # Assuming sRGB encoded colour values.
+  RGB = np.array([255.0, 235.0, 12.0])
+
+  # Conversion to tristimulus values.
+  XYZ = colour.sRGB_to_XYZ(RGB / 255)
+
+  # Conversion to chromaticity coordinates.
+  xy = colour.XYZ_to_xy(XYZ)
+
+  # Conversion to correlated colour temperature in K.
+  CCT = colour.xy_to_CCT_Hernandez1999(xy)
+  print(CCT)
+
+  # 3557.10272422
+
+The inverse transformation matrix is as follows:
+
+   [ X ]   [  0.412453  0.357580  0.180423 ]   [ R ] **
+   [ Y ] = [  0.212671  0.715160  0.072169 ] * [ G ]
+   [ Z ]   [  0.019334  0.119193  0.950227 ]   [ B ].
+
+n = (x-0.3320)/(0.1858-y);
+CCT = 437*n^3 + 3601*n^2 + 6861*n + 5517
+
+
+https://dsp.stackexchange.com/questions/8949/how-do-i-calculate-the-color-temperature-of-the-light-source-illuminating-an-ima
+
+
+
+
+*/

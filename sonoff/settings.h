@@ -173,6 +173,43 @@ typedef union {
   };
 } Mcp23008_switch_cfg;
 
+// Enum with lamp types
+enum PCA9685_LAMP_TYPE {
+  // Not configured
+  PCA9685_LAMP_NONE             = 0,
+  // Represent one led or lamp connected to one channel
+  PCA9685_LAMP_SINGLE           = 1,
+  // A 2-channel LED strip with warm white and cold white
+  PCA9685_LAMP_MULTIWHITE       = 2,
+  // A 3-channel RGB lamp
+  PCA9685_LAMP_RGB              = 3,
+  // A 4-channel RGBW strip
+  PCA9685_LAMP_RGBW             = 4,
+  // A 5-channel RGBWW strip
+  PCA9685_LAMP_RGBWW            = 5
+};
+typedef struct {
+  // Lamp type
+  PCA9685_LAMP_TYPE       type;
+  // Lamp channel numbers
+  union {
+    uint32_t data;
+    struct {
+      uint32_t      ch0 : 4;
+      uint32_t      ch1 : 4;
+      uint32_t      ch2 : 4;
+      uint32_t      ch3 : 4;
+      uint32_t      ch4 : 4;
+    } __attribute__((packed));
+  } pins;
+  // Default transition velocity in 50ms ticks
+  uint16_t velocity;
+  // warm/cold white leds color in 100th of kelvins, range 27 to 70
+  uint8_t warm_temp;
+  uint8_t cold_temp;
+
+} PCA9685_dimmer_lamp;
+
 typedef struct {
   uint16_t hdr_magic;                     // header magic should match defined value, or will be defaulted
   union {
@@ -183,6 +220,8 @@ typedef struct {
       uint16_t totem_out      : 1;               // 1 -  outputs are configured with a totem pole, 0 - open-drain. Mode register 2 OUTDRV flag
     };
   } cfg;
+  // Lamp configuration
+  PCA9685_dimmer_lamp lamps[16];
 
 } PCA9685_dimmer_cfg;
 
