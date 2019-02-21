@@ -184,16 +184,14 @@ enum PCA9685_LAMP_TYPE {
   // A 3-channel RGB lamp
   PCA9685_LAMP_RGB              = 3,
   // A 4-channel RGBW strip
-  PCA9685_LAMP_RGBW             = 4,
-  // A 5-channel RGBWW strip
-  PCA9685_LAMP_RGBWW            = 5
+  PCA9685_LAMP_RGBW             = 4
 };
 typedef struct {
   // Lamp type
   PCA9685_LAMP_TYPE       type;
   // Lamp channel numbers
   union {
-    uint32_t data;
+    uint32_t raw;
     struct {
       uint32_t      ch0 : 4;
       uint32_t      ch1 : 4;
@@ -208,6 +206,19 @@ typedef struct {
   uint8_t warm_temp;
   uint8_t cold_temp;
 
+  // Brightness value from [0..0xFF]
+  uint8_t brightness;
+  // Color temperature 2700..7000
+  uint16_t color_temperature;
+  // RGB value 0x00RRGGBB
+  union {
+    uint32_t rgb;
+    struct {
+      uint32_t blue : 8;
+      uint32_t green : 8;
+      uint32_t red : 8;
+    };
+  } color;
 } PCA9685_dimmer_lamp;
 
 typedef struct {
@@ -217,7 +228,8 @@ typedef struct {
     struct {
       uint16_t freq           : 11;              // PCA9685 frequency. Default to USE_PCA9685_DIMMER_FREQ
       uint16_t inv_out        : 1;               // Output is inverted. Mode register 2 INVRT flag
-      uint16_t totem_out      : 1;               // 1 -  outputs are configured with a totem pole, 0 - open-drain. Mode register 2 OUTDRV flag
+      uint16_t totem_out      : 1;               // 1 - outputs are configured with a totem pole, 0 - open-drain. Mode register 2 OUTDRV flag
+      uint16_t use_corr       : 1;               // 1 - use CIE1931 brightness correction, 0 - not
     };
   } cfg;
   // Lamp configuration

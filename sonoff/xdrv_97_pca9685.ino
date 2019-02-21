@@ -11,6 +11,7 @@
 #define PCA9685_DIMMER_REG_MODE2           0x01
 #define PCA9685_DIMMER_REG_LED0_ON_L       0x06
 #define PCA9685_DIMMER_REG_PRE_SCALE       0xFE
+#define PCA9685_DIMMER_MAX_DIMMER_VALUE    0x1000
 
 #define PCA9685_BIT_INVRT_POS              4
 #define PCA9685_BIT_OUTDRV_POS             2
@@ -33,6 +34,9 @@
   // Configure as a totem pole structure by default
   #define USE_PCA9685_DIMMER_TOTEM_OUTPUT 1
 #endif
+
+// power on or off velocity in 4096 / 50ms ticks
+#define VELOCITY_ON_OFF 64
 
 
 enum PCA9685_BOOT_EVENT {
@@ -68,7 +72,10 @@ typedef struct {
   // Current dimmer value target
   uint16_t   m_target;
   // Curent velocity of m_value change
-  uint8_t    m_velocity;
+  uint16_t   m_velocity;
+  // Current transition happening due to the power ON/OFF.
+  // If set, change to the velocity can't be made until the end of the transition
+  uint8_t    m_powerTransition;
 } PCA9685Dimmer_Channel;
 
 // A low-level data structure used by 50ms timer to update PCA9685 PWM registers and
@@ -81,6 +88,66 @@ struct {
   // Channel information
   PCA9685Dimmer_Channel   m_channel[PCA9685_DIMMER_CHANNELS];
 } PCA9685Dimmer_Channels;
+
+
+// Previous state of power value
+power_t PCA9685Dimmer_power;
+
+/**
+ * // CIE1931 correction table generation script
+
+# min PWM value rendering non-dark LED
+# depends on schematic/led/pwm freq
+OUT_START = 35
+# Correction array size
+INPUT_SIZE = 256
+# MAX PWM value
+OUTPUT_SIZE = 4096
+INT_TYPE = 'const uint16_t'
+TABLE_NAME = 'PCA9685Dimmer_corr';
+
+def cie1931(L):
+    L = L*100.0
+    if L <= 8:
+        return (L/902.3)
+    else:
+        return ((L+16.0)/116.0)**3
+
+x = range(0,int(INPUT_SIZE) - 1)
+y = [round(cie1931(float(L)/(INPUT_SIZE - 2))*(OUTPUT_SIZE - OUT_START)) + OUT_START for L in x]
+
+print('// CIE1931 correction table')
+print('%s %s[%d] PROGMEM = {0, ' % (INT_TYPE, TABLE_NAME, len(x) + 1), end='')
+for i,L in enumerate(y):
+    print('%d, ' % int(L), end='')
+    if i % 15 == 14:
+        print('\n\t', end='')
+print('\n};\n\n')
+*/
+
+// CIE1931 correction table
+
+#define CORRECTION_TABLE_LENGTH 256
+
+const uint16_t PCA9685Dimmer_corr[CORRECTION_TABLE_LENGTH] = {
+  0, 38, 40, 42, 43, 45, 47, 49, 50, 52, 54, 56, 57, 59, 61, 63,
+  65, 66, 68, 70, 72, 73, 75, 77, 79, 81, 83, 85, 87, 89, 92,
+  94, 96, 99, 101, 104, 107, 109, 112, 115, 118, 121, 124, 128, 131, 134,
+  138, 141, 145, 148, 152, 156, 160, 164, 168, 172, 177, 181, 186, 190, 195,
+  200, 205, 210, 215, 220, 225, 230, 236, 241, 247, 253, 259, 265, 271, 277,
+  283, 290, 296, 303, 310, 317, 324, 331, 338, 345, 353, 360, 368, 376, 384,
+  392, 400, 408, 417, 425, 434, 443, 452, 461, 470, 479, 489, 498, 508, 518,
+  528, 538, 549, 559, 570, 580, 591, 602, 613, 625, 636, 648, 659, 671, 683,
+  696, 708, 721, 733, 746, 759, 772, 785, 799, 813, 826, 840, 854, 869, 883,
+  898, 912, 927, 942, 958, 973, 989, 1005, 1021, 1037, 1053, 1069, 1086, 1103, 1120,
+  1137, 1155, 1172, 1190, 1208, 1226, 1244, 1263, 1281, 1300, 1319, 1339, 1358, 1378, 1398,
+  1418, 1438, 1458, 1479, 1500, 1521, 1542, 1563, 1585, 1607, 1629, 1651, 1674, 1696, 1719,
+  1742, 1765, 1789, 1813, 1836, 1861, 1885, 1909, 1934, 1959, 1984, 2010, 2036, 2061, 2087,
+  2114, 2140, 2167, 2194, 2221, 2249, 2276, 2304, 2332, 2361, 2389, 2418, 2447, 2477, 2506,
+  2536, 2566, 2596, 2627, 2657, 2688, 2720, 2751, 2783, 2815, 2847, 2880, 2912, 2945, 2978,
+  3012, 3046, 3080, 3114, 3148, 3183, 3218, 3253, 3289, 3324, 3360, 3397, 3433, 3470, 3507,
+  3545, 3582, 3620, 3658, 3697, 3735, 3774, 3814, 3853, 3893, 3933, 3973, 4014, 4055, 4096
+};
 
 /////////////// Acting & Buckets handling
 #define SEQUENCE_LENGTH(channels, start, mask) ((sizeof(int) * 8) - __builtin_clz(channels & ~mask) - start)
@@ -111,10 +178,53 @@ void PCA9685Dimmer_updateActing(uint16_t acting) {
   PCA9685Dimmer_Channels.m_acting = acting;
 }
 
-
-
 void PCA9685Dimmer_InitDevices(void) {
-  devices_present = 1;
+  devices_present = 0;
+
+  // counting actual devices
+  for (int i = 0; i < 16; ++i) {
+    if (Settings.pca685_dimmer.lamps[i].type == PCA9685_LAMP_NONE) {
+      break;
+    }
+
+    // Check values
+    if (Settings.pca685_dimmer.lamps[i].type == PCA9685_LAMP_MULTIWHITE) {
+      uint8_t warm = Settings.pca685_dimmer.lamps[i].warm_temp;
+      uint8_t cold = Settings.pca685_dimmer.lamps[i].cold_temp;
+      if (warm < 20 || warm > 80 ) {
+        warm = 27;
+      }
+      if (cold < 20 || cold > 80 ) {
+        cold = 70;
+      }
+      if (warm >= cold) {
+        warm = 27;
+        cold = 70;
+      }
+      Settings.pca685_dimmer.lamps[i].warm_temp = warm;
+      Settings.pca685_dimmer.lamps[i].cold_temp = cold;
+
+      if (Settings.pca685_dimmer.lamps[i].color_temperature < (warm * 100)) {
+        Settings.pca685_dimmer.lamps[i].color_temperature = warm * 100;
+      }
+      if (Settings.pca685_dimmer.lamps[i].color_temperature > (cold * 100)) {
+        Settings.pca685_dimmer.lamps[i].color_temperature = cold * 100;
+      }
+    } else {
+      // Set black color to white. Do not allow black color, use power off instead
+      if (Settings.pca685_dimmer.lamps[i].color.rgb == 0) {
+        Settings.pca685_dimmer.lamps[i].color.rgb = 0xFFFFFF;
+      }
+    }
+
+    // Do not zero out brightness. Use power off instead
+    if (Settings.pca685_dimmer.lamps[i].brightness == 0) {
+      Settings.pca685_dimmer.lamps[i].brightness = 1;
+    }
+
+    ++devices_present;
+  }
+
   light_type = LT_BASIC;
 
   // Turn off all channels
@@ -202,7 +312,7 @@ void PCA9685Dimmer_SetPWMfreq(uint16_t freq) {
   I2cWrite8(USE_PCA9685_DIMMER_ADDR, PCA9685_DIMMER_REG_MODE1, current_mode1 | 0xA0); // Reset MODE1 register to original state and enable auto increment
 }
 
-#define SETTINGS_MAGIC 0xA0DF
+#define SETTINGS_MAGIC 0xA0E2
 
 void PCA9685Dimmer_CheckSettings (void) {
   uint16_t freq = Settings.pca685_dimmer.cfg.freq;
@@ -219,6 +329,18 @@ void PCA9685Dimmer_CheckSettings (void) {
   Settings.pca685_dimmer.cfg.freq = USE_PCA9685_DIMMER_FREQ;
   Settings.pca685_dimmer.cfg.inv_out = USE_PCA9685_DIMMER_INVERT_OUTPUT;
   Settings.pca685_dimmer.cfg.totem_out = USE_PCA9685_DIMMER_TOTEM_OUTPUT;
+
+  memset(Settings.pca685_dimmer.lamps, 0, sizeof(Settings.pca685_dimmer.lamps));
+  for (int i = 0; i < 16; ++i) {
+    Settings.pca685_dimmer.lamps[i].type = PCA9685_LAMP_NONE;
+    // Immediate transition
+    Settings.pca685_dimmer.lamps[i].velocity = 0;
+    Settings.pca685_dimmer.lamps[i].warm_temp = 27;
+    Settings.pca685_dimmer.lamps[i].cold_temp = 70;
+    Settings.pca685_dimmer.lamps[i].brightness = 0xFF;
+    Settings.pca685_dimmer.lamps[i].color.rgb = 0xFFFFFF;
+    Settings.pca685_dimmer.lamps[i].color_temperature = 4800;
+  }
 
   // Indicate that settings has been reset
   PCA9685Dimmer_boot_events |= PCA9685_BOOT_SETTINGS;
@@ -244,9 +366,186 @@ void PCA9685Dimmer_LogBootEvents(void) {
   PCA9685Dimmer_boot_events = PCA9685_BOOT_NONE;
 }
 
+//////////////////////////// RGB / Colors //////////////////////////////////////////////////////////////
+
+void PCA9685Dimmer_convertRGBtoXYZ(int inR, int inG, int inB, float * outX, float * outY, float * outZ) {
+
+	float var_R = (inR / 255.0f); //R from 0 to 255
+	float var_G = (inG / 255.0f); //G from 0 to 255
+	float var_B = (inB / 255.0f); //B from 0 to 255
+
+	if (var_R > 0.04045f)
+		var_R = powf(( (var_R + 0.055f) / 1.055f), 2.4f);
+	else
+		var_R = var_R / 12.92f;
+
+	if (var_G > 0.04045)
+		var_G = powf(( (var_G + 0.055f) / 1.055f), 2.4f);
+	else
+		var_G = var_G / 12.92f;
+
+	if (var_B > 0.04045f)
+		var_B = powf(( (var_B + 0.055f) / 1.055f), 2.4f);
+	else
+		var_B = var_B / 12.92f;
+
+	var_R = var_R * 100;
+	var_G = var_G * 100;
+	var_B = var_B * 100;
+
+	//Observer. = 2°, Illuminant = D65
+	*outX = var_R * 0.4124f + var_G * 0.3576f + var_B * 0.1805f;
+	*outY = var_R * 0.2126f + var_G * 0.7152f + var_B * 0.0722f;
+	*outZ = var_R * 0.0193f + var_G * 0.1192f + var_B * 0.9505f;
+}
+
+
+// Given RGB is set to the lamp, update color temperature based on RGB
+void PCA9685Dimmer_applyRGBToColorTemperature(int index) {
+  // Get RGB components and convert it to the color temperature
+  int r = Settings.pca685_dimmer.lamps[index].color.red;
+  int g = Settings.pca685_dimmer.lamps[index].color.green;
+  int b = Settings.pca685_dimmer.lamps[index].color.blue;
+
+  float X, Y, Z;
+  PCA9685Dimmer_convertRGBtoXYZ(r, g, b, &X, &Y, &Z);
+  float summ = X + Y + Z;
+  if (summ == 0.0) {
+    return;
+  }
+  float x = X / summ;
+  float y = Y / summ;
+  float n = (x - 0.3320) / (0.1858 - y);
+
+  int color_temp = ((449 * n * n * n) + (3525 * n * n) + (6823.3 * n) + 5520.33);
+
+  int warm_temp = (int)Settings.pca685_dimmer.lamps[index].warm_temp * 100;
+  int cold_temp = (int)Settings.pca685_dimmer.lamps[index].cold_temp * 100;
+  if (color_temp < warm_temp) {
+    color_temp = warm_temp;
+  }
+  if (color_temp > cold_temp && cold_temp > 0) {
+    color_temp = cold_temp;
+  }
+  Settings.pca685_dimmer.lamps[index].color_temperature = color_temp;
+}
+
+// Apply brightness/color/temp changes from settings to the PWM pins
+// if isPower is set, set m_powerTransition. Else check if m_powerTransition set and ignore velocity
+void PCA9685Dimmer_applyColorBrightness(int index, uint16_t velocity, boolean isPower) {
+
+  // power is not obvoius global var...
+  boolean power_on = power & (1 << index);
+  // Get brightness from settings or zero, if power is off for this lamp
+  uint16_t brightness = power_on ? ((uint16_t)Settings.pca685_dimmer.lamps[index].brightness << 4 ) : 0;
+
+  switch(Settings.pca685_dimmer.lamps[index].type) {
+    case PCA9685_LAMP_SINGLE: {
+      int pin = Settings.pca685_dimmer.lamps[index].pins.ch0;
+      PCA9685Dimmer_Channels.m_channel[pin].m_shift = 0;
+      PCA9685Dimmer_Channels.m_channel[pin].m_target = brightness;
+      if (isPower || !PCA9685Dimmer_Channels.m_channel[pin].m_powerTransition) {
+        PCA9685Dimmer_Channels.m_channel[pin].m_velocity = velocity;
+      }
+      PCA9685Dimmer_updateActing(1 << pin);
+      break;
+    }
+    // A 2-channel LED strip with warm white and cold white
+    case PCA9685_LAMP_MULTIWHITE: {
+      float color_temp = Settings.pca685_dimmer.lamps[index].color_temperature;
+      float warm_temp = (float)Settings.pca685_dimmer.lamps[index].warm_temp * 100;
+      float cold_temp = (float)Settings.pca685_dimmer.lamps[index].cold_temp * 100;
+
+      float distance = cold_temp - warm_temp;
+      if (distance == 0) { distance = 1; }
+      float warm = (distance - (color_temp - warm_temp)) / distance;
+      float cold = (distance - (cold_temp - color_temp)) / distance;
+
+      warm *= brightness;
+      cold *= brightness;
+
+      snprintf_P(log_data, sizeof(log_data), PSTR("PCA9685: WARM: %d, COLD: %d"), (int)warm, (int)cold);
+      AddLog(LOG_LEVEL_DEBUG);
+
+      if (warm > PCA9685_DIMMER_MAX_DIMMER_VALUE) {
+        warm = PCA9685_DIMMER_MAX_DIMMER_VALUE;
+      }
+
+      if (cold > PCA9685_DIMMER_MAX_DIMMER_VALUE) {
+        cold = PCA9685_DIMMER_MAX_DIMMER_VALUE;
+      }
+
+      int pin_warm = Settings.pca685_dimmer.lamps[index].pins.ch0;
+      int pin_cold = Settings.pca685_dimmer.lamps[index].pins.ch1;
+      // Update shift to distribute power evenly
+      PCA9685Dimmer_Channels.m_channel[pin_warm].m_shift = 0;
+      PCA9685Dimmer_Channels.m_channel[pin_cold].m_shift = PCA9685_DIMMER_MAX_DIMMER_VALUE / 2;
+      // Update brightness
+      PCA9685Dimmer_Channels.m_channel[pin_warm].m_target = (uint16_t)warm;
+      PCA9685Dimmer_Channels.m_channel[pin_cold].m_target = (uint16_t)cold;
+      // Check if any ongoing power on/off transition happens
+      boolean isPowerTransition = PCA9685Dimmer_Channels.m_channel[pin_warm].m_powerTransition ||
+        PCA9685Dimmer_Channels.m_channel[pin_cold].m_powerTransition;
+
+      // Update velocity if it's power transition or no power transition in progress
+      if (isPower || !isPowerTransition) {
+        PCA9685Dimmer_Channels.m_channel[pin_warm].m_velocity = velocity;
+        PCA9685Dimmer_Channels.m_channel[pin_cold].m_velocity = velocity;
+      }
+
+      PCA9685Dimmer_updateActing((1 << pin_warm) | (1 << pin_cold));
+      break;
+    }
+
+    // // A 3-channel RGB lamp
+    // PCA9685_LAMP_RGB              = 3,
+    // // A 4-channel RGBW strip
+    // PCA9685_LAMP_RGBW             = 4
+  }
+}
+
+void PCA9685Dimmer_Power(void) {
+  uint8_t rpower = XdrvMailbox.index;
+  int16_t source = XdrvMailbox.payload;
+
+  // Invert prev pover value to process all bits during restart
+  if (source == SRC_RESTART) {
+    PCA9685Dimmer_power = ~rpower;
+  }
+
+  uint8_t prev_power = PCA9685Dimmer_power;
+  PCA9685Dimmer_power = rpower;
+
+  for (int i = 0; i < devices_present; ++i) {
+    if (Settings.pca685_dimmer.lamps[i].type == PCA9685_LAMP_NONE) {
+      break;
+    }
+    if ((prev_power & 1) != (rpower & 1)) {
+      PCA9685Dimmer_applyColorBrightness(i, VELOCITY_ON_OFF, true);
+    }
+    rpower = rpower >> 1;
+    prev_power = prev_power >> 1;
+  }
+}
 //////////////////////////////////////////////////////////////////////
 ////////////////////////// Low level dimming /////////////////////////
 //////////////////////////////////////////////////////////////////////
+uint16_t PCA9685Dimmer_PWMCorrection(uint16_t logical) {
+  if (!Settings.pca685_dimmer.cfg.use_corr) {
+    return logical;
+  }
+  // 4096 logical levels maps to 256 correction table by stripping 4 LS bits
+  // 4 lsb of range 0..15 used to interpolate value between correction table points (linear)
+  uint16_t index = logical >> 4;
+  if (index >= (CORRECTION_TABLE_LENGTH - 1)) {
+    return PCA9685Dimmer_corr[CORRECTION_TABLE_LENGTH - 1];
+  }
+  uint16_t corrected_value = PCA9685Dimmer_corr[index];
+  uint16_t next_value = PCA9685Dimmer_corr[index + 1];
+  // cv = cv + (diff * 0..15) / 16 where diff = next_point - current_point
+  corrected_value += (((int)next_value - (int)corrected_value) * ((int)(logical & 0xF))) / 0x10;
+  return corrected_value;
+}
 
 boolean PCA9685Dimmer_Advance(void) {
   // Do nothing if none of the channels should be updated
@@ -260,12 +559,14 @@ boolean PCA9685Dimmer_Advance(void) {
     PCA9685Dimmer_Channel* ch = &PCA9685Dimmer_Channels.m_channel[i];
     // If value match target, do nothing
     if (ch->m_value == ch->m_target) {
+      ch->m_powerTransition = 0;
       continue;
     }
 
     // If velocity value is zero (and values does not match), set value to target
     if (ch->m_velocity == 0) {
       ch->m_value = ch->m_target;
+      ch->m_powerTransition = 0;
     } else {
       // Get diff between current value and target value
       int32_t diff = (int32_t)ch->m_value - (int32_t)ch->m_target;
@@ -273,6 +574,7 @@ boolean PCA9685Dimmer_Advance(void) {
       // If diff between target and value is less-eq that delta, update value to the target
       if (abs(diff) <= delta) {
         ch->m_value = ch->m_target;
+        ch->m_powerTransition = 0;
       } else {
         // A case, where value far from target. Move value toward the target
         ch->m_value = diff > 0 ? ch->m_value - delta : ch->m_value + delta;
@@ -282,15 +584,14 @@ boolean PCA9685Dimmer_Advance(void) {
     }
   }
 
-
   // Update PCA9685 values using buckets to avoid 32 byte I2C buffer limit
   for (int bucket = 0; bucket < PCA9685_DIMMER_I2C_BUFFERS; ++bucket) {
     if (PCA9685Dimmer_Channels.m_buckets[bucket].len == 0) {
       break;
     }
 
-    int pos =  PCA9685Dimmer_Channels.m_buckets[bucket].pos;
-    int len =  PCA9685Dimmer_Channels.m_buckets[bucket].len;
+    int pos = PCA9685Dimmer_Channels.m_buckets[bucket].pos;
+    int len = PCA9685Dimmer_Channels.m_buckets[bucket].len;
     // Start transmission
     Wire.beginTransmission((uint8_t)USE_PCA9685_DIMMER_ADDR);
     // Select start address based on a bucket start
@@ -298,21 +599,21 @@ boolean PCA9685Dimmer_Advance(void) {
 
     // Mode1 AI flag should be enabled
     for (int i = pos; i < (pos + len); ++i) {
-      uint16_t value = PCA9685Dimmer_Channels.m_channel[i].m_value;
+      uint16_t value = PCA9685Dimmer_PWMCorrection(PCA9685Dimmer_Channels.m_channel[i].m_value);
       uint16_t start = PCA9685Dimmer_Channels.m_channel[i].m_shift;
 
-      if (value >= 0x1000) {
+      if (value >= PCA9685_DIMMER_MAX_DIMMER_VALUE) {
         // Special case, turn on, no PWM
         value = 0;
-        start = 0x1000;
+        start = PCA9685_DIMMER_MAX_DIMMER_VALUE;
       } else if (value == 0) {
         // Special case, turn off, no PWM
-        value = 0x1000;
+        value = PCA9685_DIMMER_MAX_DIMMER_VALUE;
         start = 0;
       } else {
         value += start;
-        if (value >= 0x1000) {
-          value &= 0xFFF;
+        if (value >= PCA9685_DIMMER_MAX_DIMMER_VALUE) {
+          value &= (PCA9685_DIMMER_MAX_DIMMER_VALUE - 1);
         }
       }
 
@@ -342,13 +643,22 @@ enum PCA9685Dimmer_Commands {
   // get/set raw value for the channel
   PCA9685_CMND_RAW,
   // get/set lamps configuration
-  PCA9685_CMND_LAMP
+  PCA9685_CMND_LAMP,
+  // get/set lamp brightness
+  PCA9685_CMND_BRIGHT,
+  // get/set lamp color temperature
+  PCA9685_CMND_TEMPERATURE,
+  // get/set lamp RGB color
+  PCA9685_CMND_COLOR
 };
 
 const char g_PCA9685Dimmer_Commands[] PROGMEM =
-  "P9SETUP|P9RAW|P9LAMP";
+  "P9SETUP|P9RAW|P9LAMP|P9BRIGHT|P9TEMP|P9COLOR";
 
 int PCA9685Dimmer_GetParamCount(char* q, char delim) {
+  if (XdrvMailbox.data_len == 0) {
+    return 0;
+  }
   int count = 1;
   for (; *q; count += (*q++ == delim));
   return count;
@@ -363,15 +673,16 @@ boolean PCA9685Dimmer_CheckParamCount(uint16_t count) {
 
 
 void PCA9685Dimmer_CommandSetupPrint(void) {
-  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"FREQ\":%d,\"INVRT\":%d,\"OUTDRV\":%s}"),
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"FREQ\":%d,\"INVRT\":%d,\"OUTDRV\":%s,\"CIE1931\":%d}"),
     Settings.pca685_dimmer.cfg.freq,
     Settings.pca685_dimmer.cfg.inv_out,
-    (Settings.pca685_dimmer.cfg.totem_out ? "TOTEM" : "ODRAIN")
+    (Settings.pca685_dimmer.cfg.totem_out ? "TOTEM" : "ODRAIN"),
+    Settings.pca685_dimmer.cfg.use_corr
   );
 }
 
 void PCA9685Dimmer_CommandSetup(void) {
-  if (!PCA9685Dimmer_CheckParamCount(3)) {
+  if (!PCA9685Dimmer_CheckParamCount(4)) {
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR(D_JSON_ERROR));
     return;
   }
@@ -380,10 +691,12 @@ void PCA9685Dimmer_CommandSetup(void) {
   char* freqStr = subStr(sub_string, XdrvMailbox.data, ",", 1);
   char* invStr = subStr(sub_string, XdrvMailbox.data, ",", 2);
   char* outDrvStr = subStr(sub_string, XdrvMailbox.data, ",", 3);
+  char* useCorrection = subStr(sub_string, XdrvMailbox.data, ",", 4);
 
   Settings.pca685_dimmer.cfg.freq = atoi(freqStr);
   Settings.pca685_dimmer.cfg.inv_out = atoi(invStr);
   Settings.pca685_dimmer.cfg.totem_out = atoi(outDrvStr);
+  Settings.pca685_dimmer.cfg.use_corr = atoi(useCorrection);
 
   PCA9685Dimmer_CheckSettings();
   PCA9685Dimmer_Reset();
@@ -398,7 +711,8 @@ void PCA9685Dimmer_CommandRaw(boolean isGet) {
   }
 
   if (!isGet) {
-    if (!PCA9685Dimmer_CheckParamCount(1)) {
+    int param_count = PCA9685Dimmer_GetParamCount(XdrvMailbox.data, ',');
+    if (param_count == 0 || param_count > 2) {
       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR(D_JSON_ERROR));
       return;
     }
@@ -408,6 +722,10 @@ void PCA9685Dimmer_CommandRaw(boolean isGet) {
     PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_shift = 0;
     PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_target = atoi(val);
     PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_velocity = 32;
+    if (param_count == 2) {
+      val = subStr(sub_string, XdrvMailbox.data, ",", 2);
+      PCA9685Dimmer_Channels.m_channel[XdrvMailbox.index].m_velocity = atoi(val);
+    }
 
     // Update PWM on the next 50ms cycle
     PCA9685Dimmer_updateActing(1 << XdrvMailbox.index);
@@ -466,17 +784,6 @@ void PCA9685Dimmer_CommandLamp_Print(void) {
           Settings.pca685_dimmer.lamps[i].pins.ch3,
           velocityMs);
         break;
-      case PCA9685_LAMP_RGBWW:
-        snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%sRGBWW=%d:%d:%d:%d:%d&KW=%d&KC=%d&V=%d"), mqtt_data,
-          Settings.pca685_dimmer.lamps[i].pins.ch0,
-          Settings.pca685_dimmer.lamps[i].pins.ch1,
-          Settings.pca685_dimmer.lamps[i].pins.ch2,
-          Settings.pca685_dimmer.lamps[i].pins.ch3,
-          Settings.pca685_dimmer.lamps[i].pins.ch4,
-          Settings.pca685_dimmer.lamps[i].warm_temp * 100,
-          Settings.pca685_dimmer.lamps[i].cold_temp * 100,
-          velocityMs);
-        break;
       default:
         break;
     }
@@ -496,7 +803,7 @@ void PCA9685Dimmer_CommandLamp_SetPins(PCA9685_dimmer_lamp* lamp, char* value) {
     uint8_t val = atoi(pinStr) & 0xF;
     channels |= (val << (i * 4));
   }
-  lamp->pins.data = channels;
+  lamp->pins.raw = channels;
 }
 
 void PCA9685Dimmer_CommandLamp_Set(void) {
@@ -526,9 +833,6 @@ void PCA9685Dimmer_CommandLamp_Set(void) {
       } else if (!strncmp(keyStr, "MW", 2)) {
         Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_MULTIWHITE;
         PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
-      } else if (!strncmp(keyStr, "RGBWW", 5)) {
-        Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_RGBWW;
-        PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
       } else if (!strncmp(keyStr, "RGBW", 4)) {
         Settings.pca685_dimmer.lamps[lamp].type = PCA9685_LAMP_RGBW;
         PCA9685Dimmer_CommandLamp_SetPins(&Settings.pca685_dimmer.lamps[lamp], valueStr);
@@ -544,9 +848,92 @@ void PCA9685Dimmer_CommandLamp_Set(void) {
       }
     }
   }
-
+  // Try to set power devices w/o software restart
+  PCA9685Dimmer_InitDevices();
+  // Print current setup
   PCA9685Dimmer_CommandLamp_Print();
 }
+
+void PCA9685Dimmer_CommandLight(int command_code) {
+  if (devices_present <= XdrvMailbox.index) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("INDEX ERROR"));
+    return;
+  }
+
+  int param_count = PCA9685Dimmer_GetParamCount(XdrvMailbox.data, ',');
+
+  if (param_count > 0) {
+    char sub_string[XdrvMailbox.data_len + 1];
+    char* paramValue = subStr(sub_string, XdrvMailbox.data, ",", 1);
+
+    switch (command_code)
+    {
+      case PCA9685_CMND_BRIGHT:
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].brightness = atoi(paramValue);
+        break;
+
+      case PCA9685_CMND_TEMPERATURE:
+      {
+        if (Settings.pca685_dimmer.lamps[XdrvMailbox.index].type != PCA9685_LAMP_MULTIWHITE) {
+          snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("NOT MULTIWHITE"));
+          return;
+        }
+        int color_temperature = atoi(paramValue);
+        int warm = (int)Settings.pca685_dimmer.lamps[XdrvMailbox.index].warm_temp * 100;
+        int cold = (int)Settings.pca685_dimmer.lamps[XdrvMailbox.index].cold_temp * 100;
+        if (warm > color_temperature) { color_temperature = warm; }
+        if (cold < color_temperature) { color_temperature = cold; }
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].color_temperature = color_temperature;
+        break;
+      }
+
+      case PCA9685_CMND_COLOR: {
+        if (3 != PCA9685Dimmer_GetParamCount(paramValue, ':')) {
+          snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("ERROR: need R:G:B value"));
+          return;
+        }
+        char rgb_string[strlen(paramValue) + 1];
+        uint32_t red = atoi(subStr(rgb_string, paramValue, ":", 1)) & 0xFF;
+        uint32_t green = atoi(subStr(rgb_string, paramValue, ":", 2)) & 0xFF;
+        uint32_t blue = atoi(subStr(rgb_string, paramValue, ":", 3)) & 0xFF;
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].color.rgb = (red << 16) | (green << 8) | blue;
+
+        if (Settings.pca685_dimmer.lamps[XdrvMailbox.index].type == PCA9685_LAMP_MULTIWHITE) {
+          PCA9685Dimmer_applyRGBToColorTemperature(XdrvMailbox.index);
+        }
+        break;
+      }
+    }
+
+    uint16_t velocity = Settings.pca685_dimmer.lamps[XdrvMailbox.index].velocity;
+    if (param_count > 1) {
+      char* paramVelocity = subStr(sub_string, XdrvMailbox.data, ",", 2);
+      velocity = atoi(paramVelocity);
+    }
+
+    PCA9685Dimmer_applyColorBrightness(XdrvMailbox.index, velocity, false);
+  }
+
+  switch (command_code)
+  {
+    case PCA9685_CMND_BRIGHT:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d"), Settings.pca685_dimmer.lamps[XdrvMailbox.index].brightness);
+      break;
+
+    case PCA9685_CMND_TEMPERATURE:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d"), Settings.pca685_dimmer.lamps[XdrvMailbox.index].color_temperature);
+      break;
+
+    case PCA9685_CMND_COLOR:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d:%d:%d"),
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].color.red,
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].color.green,
+        Settings.pca685_dimmer.lamps[XdrvMailbox.index].color.blue
+      );
+      break;
+  }
+}
+
 
 boolean PCA9685Dimmer_Command(void)
 {
@@ -576,6 +963,12 @@ boolean PCA9685Dimmer_Command(void)
         PCA9685Dimmer_CommandLamp_Set();
       }
       return true;
+    case PCA9685_CMND_BRIGHT:
+    case PCA9685_CMND_TEMPERATURE:
+    case PCA9685_CMND_COLOR:
+      PCA9685Dimmer_CommandLight(command_code);
+      return true;
+
     default:
       return false;
   }
@@ -644,7 +1037,10 @@ boolean Xdrv97(byte function)
     case FUNC_EVERY_50_MSECOND: {
       PCA9685Dimmer_Advance();
       break;
-
+    case FUNC_SET_DEVICE_POWER:
+      PCA9685Dimmer_Power();
+      result = true;
+      break;
     }
     default:
       break;
@@ -696,42 +1092,5 @@ if (Bo > 255) Bo = 255;
 if (Ro > 255) Ro = 255;
 if (Go > 255) Go = 255;
 return new rgbwcolor() { r = Ro, g = Go, b = Bo, w = Wo };
-
-////////////////////////////////////////////////////////////////////////////////////
-RGB to color temperature
-
-
-  import numpy as np
-  import colour
-
-  # Assuming sRGB encoded colour values.
-  RGB = np.array([255.0, 235.0, 12.0])
-
-  # Conversion to tristimulus values.
-  XYZ = colour.sRGB_to_XYZ(RGB / 255)
-
-  # Conversion to chromaticity coordinates.
-  xy = colour.XYZ_to_xy(XYZ)
-
-  # Conversion to correlated colour temperature in K.
-  CCT = colour.xy_to_CCT_Hernandez1999(xy)
-  print(CCT)
-
-  # 3557.10272422
-
-The inverse transformation matrix is as follows:
-
-   [ X ]   [  0.412453  0.357580  0.180423 ]   [ R ] **
-   [ Y ] = [  0.212671  0.715160  0.072169 ] * [ G ]
-   [ Z ]   [  0.019334  0.119193  0.950227 ]   [ B ].
-
-n = (x-0.3320)/(0.1858-y);
-CCT = 437*n^3 + 3601*n^2 + 6861*n + 5517
-
-
-https://dsp.stackexchange.com/questions/8949/how-do-i-calculate-the-color-temperature-of-the-light-source-illuminating-an-ima
-
-
-
 
 */
