@@ -316,8 +316,8 @@ enum SupportedModules {
   SP10,
   WAGA,
   SYF05,
-//   KRIDA_DIMMER,
-//   PCA9685_DIMMER,
+  KRIDA_DIMMER,
+  PCA9685_DIMMER,
   MAXMODULE
 };
 
@@ -659,9 +659,9 @@ const uint8_t kModuleNiceList[MAXMODULE] PROGMEM = {
   SYF05,
   YTF_IR_BRIDGE,
   WITTY,               // Development Devices
-  WEMOS
-//   KRIDA_DIMMER,
-//   PCA9685_DIMMER
+  WEMOS,
+  KRIDA_DIMMER,
+  PCA9685_DIMMER
 };
 
 // Default module settings
@@ -1924,43 +1924,39 @@ const mytmplt kModules[MAXMODULE] PROGMEM = {
      0,                // GPIO15 wired to GND
      GPIO_USER,        // GPIO16 N.C.
      GPIO_FLAG_ADC0    // ADC0 A0 Analog input
+  },
+  { "Krida Dim",    // Any ESP8266/ESP8285 device connected with I2C Krida dimmer https://www.amazon.com/Channel-Dimmer-Arduino-Raspberry-Projects/dp/B06Y1TSQ4Q#feature-bullets-btf
+     GPIO_USER,        // GPIO00 D3 Wemos Button Shield
+     GPIO_USER,        // GPIO01 TX Serial RXD
+     GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
+     GPIO_USER,        // GPIO03 RX Serial TXD and Optional sensor
+     GPIO_USER,        // GPIO04 D2 Wemos I2C SDA
+     GPIO_USER,        // GPIO05 D1 Wemos I2C SCL / Wemos Relay Shield (0 = Off, 1 = On) / Wemos WS2812B RGB led Shield
+     0,                // Flash connection or GPIO09 on ESP8285 only!
+     0,                // Flash connection or GPIO10 on ESP8285 only!
+     GPIO_USER,        // GPIO12 D6
+     GPIO_USER,        // GPIO13 D7
+     GPIO_USER,        // GPIO14 D5
+     GPIO_USER,        // GPIO15 D8
+     GPIO_USER,        // GPIO16 D0 Wemos Wake
+     GPIO_FLAG_ADC0    // ADC0   A0 Analog input
+  },
+  { "PCA9685 Dim",    // Any ESP8266/ESP8285 device connected with I2C Krida dimmer https://www.amazon.com/Channel-Dimmer-Arduino-Raspberry-Projects/dp/B06Y1TSQ4Q#feature-bullets-btf
+     GPIO_USER,        // GPIO00 D3 Wemos Button Shield
+     GPIO_USER,        // GPIO01 TX Serial RXD
+     GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
+     GPIO_USER,        // GPIO03 RX Serial TXD and Optional sensor
+     GPIO_I2C_SDA,     // I2C SDA
+     GPIO_I2C_SCL,     // I2C SCL
+     0,                // Flash connection or GPIO09 on ESP8285 only!
+     0,                // Flash connection or GPIO10 on ESP8285 only!
+     GPIO_USER,        // GPIO12 D6
+     GPIO_USER,        // GPIO13 D7
+     GPIO_DSB,         // DS18x20 module temperature sensor
+     GPIO_LED1,        // Status led
+     GPIO_USER,        // GPIO16 D0 Wemos Wake
+     GPIO_FLAG_ADC0    // ADC0   A0 Analog input
   }
-//   { "Krida Dim",    // Any ESP8266/ESP8285 device connected with I2C Krida dimmer https://www.amazon.com/Channel-Dimmer-Arduino-Raspberry-Projects/dp/B06Y1TSQ4Q#feature-bullets-btf
-//      GPIO_USER,        // GPIO00 D3 Wemos Button Shield
-//      GPIO_USER,        // GPIO01 TX Serial RXD
-//      GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
-//      GPIO_USER,        // GPIO03 RX Serial TXD and Optional sensor
-//      GPIO_USER,        // GPIO04 D2 Wemos I2C SDA
-//      GPIO_USER,        // GPIO05 D1 Wemos I2C SCL / Wemos Relay Shield (0 = Off, 1 = On) / Wemos WS2812B RGB led Shield
-//      0, 0, 0,          // Flash connection
-//      0,                // Flash connection or GPIO09 on ESP8285 only!
-//      0,                // Flash connection or GPIO10 on ESP8285 only!
-//      0,                // Flash connection
-//      GPIO_USER,        // GPIO12 D6
-//      GPIO_USER,        // GPIO13 D7
-//      GPIO_USER,        // GPIO14 D5
-//      GPIO_USER,        // GPIO15 D8
-//      GPIO_USER,        // GPIO16 D0 Wemos Wake
-//      GPIO_FLAG_ADC0    // ADC0   A0 Analog input
-//   },
-//   { "PCA9685 Dim",    // Any ESP8266/ESP8285 device connected with I2C Krida dimmer https://www.amazon.com/Channel-Dimmer-Arduino-Raspberry-Projects/dp/B06Y1TSQ4Q#feature-bullets-btf
-//      GPIO_USER,        // GPIO00 D3 Wemos Button Shield
-//      GPIO_USER,        // GPIO01 TX Serial RXD
-//      GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
-//      GPIO_USER,        // GPIO03 RX Serial TXD and Optional sensor
-//      GPIO_I2C_SDA,     // I2C SDA
-//      GPIO_I2C_SCL,     // I2C SCL
-//      0, 0, 0,          // Flash connection
-//      0,                // Flash connection or GPIO09 on ESP8285 only!
-//      0,                // Flash connection or GPIO10 on ESP8285 only!
-//      0,                // Flash connection
-//      GPIO_USER,        // GPIO12 D6
-//      GPIO_USER,        // GPIO13 D7
-//      GPIO_DSB,         // DS18x20 module temperature sensor
-//      GPIO_LED1,        // Status led
-//      GPIO_USER,        // GPIO16 D0 Wemos Wake
-//      GPIO_FLAG_ADC0    // ADC0   A0 Analog input
-//   }
 };
 
 /*
