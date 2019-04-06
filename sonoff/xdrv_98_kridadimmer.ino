@@ -53,7 +53,7 @@ typedef struct {
   // Last turn-on time. Used to temporarely override m_limit value and do full-on
   unsigned long m_last_on_time;
   // Set to true on transition end to report power/dimmer status
-  boolean   m_should_report_status;
+  bool   m_should_report_status;
   // Leak seconds counter
   uint8_t   m_seconds_counter;
 } Dimmable;
@@ -61,9 +61,9 @@ typedef struct {
 Dimmable g_items[KRIDA_DEVICES];
 
 // True if active 50 ms velocity for at least one of the dimmables
-boolean g_active_50msec = 0;
+bool g_active_50msec = 0;
 // True if active 250 ms velocity for at least one of the dimmables
-boolean g_active_250msec = 0;
+bool g_active_250msec = 0;
 // Holds previous power state value
 uint8_t g_power = EMPTY_POWER_STATE;
 
@@ -100,9 +100,9 @@ void reportPowerDimmer() {
   }
 }
 
-boolean KridaSetPower()
+bool KridaSetPower()
 {
-  boolean status = false;
+  bool status = false;
 
   uint8_t rpower = XdrvMailbox.index;
   int16_t source = XdrvMailbox.payload;
@@ -164,7 +164,7 @@ boolean KridaSetPower()
   return true;
 }
 
-boolean KridaModuleSelected()
+bool KridaModuleSelected()
 {
   if (!(pin[GPIO_I2C_SCL] < 99) || !(pin[GPIO_I2C_SDA] < 99)) {
     snprintf_P(log_data, sizeof(log_data), PSTR("KRI: I2C pins not set"));
@@ -225,13 +225,13 @@ void setDimmerValues() {
 
 /*
   advanceDimmers - go over dimmers and update m_value toward m_target following m_velocity rule
-  boolean isSlow - true: should advance 250ms timers, false - 50ms timers
+  bool isSlow - true: should advance 250ms timers, false - 50ms timers
   return:
     true - keep updating correspontent timer set
     false - all transitions for the current timer stopped
 */
-boolean advanceDimmers(boolean isSlow) {
-  boolean hasPending = false;
+bool advanceDimmers(bool isSlow) {
+  bool hasPending = false;
   for(size_t i = 0; i < KRIDA_DEVICES; ++i) {
     // process only slow or fast timers
     if (g_items[i].m_velocity.m_slow != isSlow) {
@@ -287,7 +287,7 @@ boolean advanceDimmers(boolean isSlow) {
 }
 
 
-boolean updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limit, struct Velocty velocty) {
+bool updateDimmerTargetAndLimit(uint16_t index, uint16_t value, uint16_t limit, struct Velocty velocty) {
   if (index >= KRIDA_DEVICES) {
     return false;
   }
@@ -338,7 +338,7 @@ enum KridaCommands {
 const char g_kridaCommands[] PROGMEM =
   D_CMND_DIMMER "|DIMLIM";
 
-boolean KridaCommand()
+bool KridaCommand()
 {
   char command [CMDSZ];
   int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic, g_kridaCommands);
@@ -407,11 +407,11 @@ void leakToFullOn() {
 \*********************************************************************************************/
 
 #define XDRV_98
-boolean skip_50 = true;
+bool skip_50 = true;
 
-boolean Xdrv98(byte function)
+bool Xdrv98(uint8_t function)
 {
-  boolean result = false;
+  bool result = false;
 
   if (KRIDA_DIMMER == Settings.module) {
     switch (function) {

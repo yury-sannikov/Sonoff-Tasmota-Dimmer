@@ -432,10 +432,10 @@ void PCA9685Dimmer_applyRGBToColorTemperature(int index) {
 
 // Apply brightness/color/temp changes from settings to the PWM pins
 // if isPower is set, set m_powerTransition. Else check if m_powerTransition set and ignore velocity
-void PCA9685Dimmer_applyColorBrightness(int index, uint16_t velocity, boolean isPower) {
+void PCA9685Dimmer_applyColorBrightness(int index, uint16_t velocity, bool isPower) {
 
   // power is not obvoius global var...
-  boolean power_on = power & (1 << index);
+  bool power_on = power & (1 << index);
   // Get brightness from settings or zero, if power is off for this lamp
   uint16_t brightness = power_on ? ((uint16_t)Settings.pca685_dimmer.lamps[index].brightness << 4 ) : 0;
 
@@ -484,7 +484,7 @@ void PCA9685Dimmer_applyColorBrightness(int index, uint16_t velocity, boolean is
       PCA9685Dimmer_Channels.m_channel[pin_warm].m_target = (uint16_t)warm;
       PCA9685Dimmer_Channels.m_channel[pin_cold].m_target = (uint16_t)cold;
       // Check if any ongoing power on/off transition happens
-      boolean isPowerTransition = PCA9685Dimmer_Channels.m_channel[pin_warm].m_powerTransition ||
+      bool isPowerTransition = PCA9685Dimmer_Channels.m_channel[pin_warm].m_powerTransition ||
         PCA9685Dimmer_Channels.m_channel[pin_cold].m_powerTransition;
 
       // Update velocity if it's power transition or no power transition in progress
@@ -547,7 +547,7 @@ uint16_t PCA9685Dimmer_PWMCorrection(uint16_t logical) {
   return corrected_value;
 }
 
-boolean PCA9685Dimmer_Advance(void) {
+bool PCA9685Dimmer_Advance(void) {
   // Do nothing if none of the channels should be updated
   if (PCA9685Dimmer_Channels.m_acting == 0) {
     return false;
@@ -664,7 +664,7 @@ int PCA9685Dimmer_GetParamCount(char* q, char delim) {
   return count;
 }
 
-boolean PCA9685Dimmer_CheckParamCount(uint16_t count) {
+bool PCA9685Dimmer_CheckParamCount(uint16_t count) {
   if (XdrvMailbox.data_len == 0) {
     return 0;
   }
@@ -703,7 +703,7 @@ void PCA9685Dimmer_CommandSetup(void) {
   PCA9685Dimmer_CommandSetupPrint();
 }
 
-void PCA9685Dimmer_CommandRaw(boolean isGet) {
+void PCA9685Dimmer_CommandRaw(bool isGet) {
   if (XdrvMailbox.index >= PCA9685_DIMMER_CHANNELS) {
     // Index OOB
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR(D_JSON_ERROR));
@@ -935,7 +935,7 @@ void PCA9685Dimmer_CommandLight(int command_code) {
 }
 
 
-boolean PCA9685Dimmer_Command(void)
+bool PCA9685Dimmer_Command(void)
 {
   char command[CMDSZ];
   int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic, g_PCA9685Dimmer_Commands);
@@ -993,7 +993,7 @@ void PCA9685Dimmer_OutputTelemetry() {
 
 
 #define XDRV_97                     97
-boolean Xdrv97(byte function)
+bool Xdrv97(uint8_t function)
 {
   if (!i2c_flg) {
       return false;
@@ -1001,7 +1001,7 @@ boolean Xdrv97(byte function)
   if (PCA9685_DIMMER != Settings.module) {
     return false;
   }
-  boolean result = false;
+  bool result = false;
   uint8_t init_attempts = 5;
 
   switch (function) {
