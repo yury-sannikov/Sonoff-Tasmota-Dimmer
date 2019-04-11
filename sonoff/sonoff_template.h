@@ -178,6 +178,9 @@ enum UserSelectablePins {
   GPIO_ROT1B,          // Rotary switch1 B Pin
   GPIO_ROT2A,          // Rotary switch2 A Pin
   GPIO_ROT2B,          // Rotary switch2 B Pin
+  GPIO_SIREN,          // Alarm siren output
+  GPIO_SIREN_WITH_CANCEL, // (IO15) Alarm siren output / input. Input to high to cancel
+  GPIO_SIREN_CANCEL,   // Alarm siren cancel button (pull to low)
   GPIO_SENSOR_END };
 
 // Programmer selectable GPIO functionality
@@ -241,6 +244,7 @@ const char kSensorNames[] PROGMEM =
   D_SENSOR_CSE7766_TX "|" D_SENSOR_CSE7766_RX "|"
   D_SENSOR_ARIRFRCV "|" D_SENSOR_TXD "|" D_SENSOR_RXD "|"
   D_SENSOR_ROTARY "1a|" D_SENSOR_ROTARY "1b|" D_SENSOR_ROTARY "2a|" D_SENSOR_ROTARY "2b|"
+  "Siren|Siren & Cancel|Siren Cancel|"
   ;
 
 /********************************************************************************************/
@@ -318,6 +322,7 @@ enum SupportedModules {
   SYF05,
   KRIDA_DIMMER,
   PCA9685_DIMMER,
+  SENSOR_SIREN,
   MAXMODULE
 };
 
@@ -587,7 +592,10 @@ const uint8_t kGpioNiceList[] PROGMEM = {
   GPIO_ROT1B,          // Rotary switch1 B Pin
   GPIO_ROT2A,          // Rotary switch2 A Pin
   GPIO_ROT2B,          // Rotary switch2 B Pin
-  GPIO_ARIRFRCV        // AliLux RF Receive input
+  GPIO_ARIRFRCV,        // AliLux RF Receive input
+  GPIO_SIREN,
+  GPIO_SIREN_WITH_CANCEL,
+  GPIO_SIREN_CANCEL
 };
 
 const uint8_t kModuleNiceList[MAXMODULE] PROGMEM = {
@@ -661,7 +669,8 @@ const uint8_t kModuleNiceList[MAXMODULE] PROGMEM = {
   WITTY,               // Development Devices
   WEMOS,
   KRIDA_DIMMER,
-  PCA9685_DIMMER
+  PCA9685_DIMMER,
+  SENSOR_SIREN
 };
 
 // Default module settings
@@ -1956,7 +1965,24 @@ const mytmplt kModules[MAXMODULE] PROGMEM = {
      GPIO_LED1,        // Status led
      GPIO_USER,        // GPIO16 D0 Wemos Wake
      GPIO_FLAG_ADC0    // ADC0   A0 Analog input
+  },
+  { "Sensor Siren",
+     GPIO_USER,        // GPIO00 D3 Wemos Button Shield
+     GPIO_MHZ_TXD,     // GPIO01 TX Serial RXD (MHZ-19b sensor TX)
+     GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
+     GPIO_MHZ_RXD,     // GPIO03 RX Serial TXD (MHZ-19b sensor RX)
+     GPIO_I2C_SDA,     // I2C SDA
+     GPIO_I2C_SCL,     // I2C SCL
+     0,                // Flash connection or GPIO09 on ESP8285 only!
+     0,                // Flash connection or GPIO10 on ESP8285 only!
+     GPIO_USER,        // GPIO12 D6
+     GPIO_USER,        // GPIO13 D7
+     GPIO_SIREN_CANCEL,// GPIO14
+     GPIO_SIREN_WITH_CANCEL,       // GPIO15
+     GPIO_USER,        // GPIO16
+     GPIO_USER         // ADC0   A0 Analog input
   }
+
 };
 
 /*
