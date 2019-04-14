@@ -255,8 +255,8 @@ void drv_siren_MqttSend(void) {
 
   AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " send: %s %s"), topic_to_send, mqtt_data);
 
-  // Send gas value to the command topic, retained
-  MqttPublish(topic_to_send, true);
+  // Send gas value to the command topic
+  MqttPublish(topic_to_send);
 }
 
 bool drv_siren_MqttData(void)

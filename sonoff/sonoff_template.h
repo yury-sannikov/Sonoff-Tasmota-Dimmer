@@ -181,6 +181,8 @@ enum UserSelectablePins {
   GPIO_SIREN,          // Alarm siren output
   GPIO_SIREN_WITH_CANCEL, // (IO15) Alarm siren output / input. Input to high to cancel
   GPIO_SIREN_CANCEL,   // Alarm siren cancel button (pull to low)
+  GPIO_MQ_POWER,       // Alarm MQ-2, MQ-7 power enable pin
+  GPIO_MQ7_HEAT,       // Alarm MQ-7 heat on pin
   GPIO_SENSOR_END };
 
 // Programmer selectable GPIO functionality
@@ -244,7 +246,7 @@ const char kSensorNames[] PROGMEM =
   D_SENSOR_CSE7766_TX "|" D_SENSOR_CSE7766_RX "|"
   D_SENSOR_ARIRFRCV "|" D_SENSOR_TXD "|" D_SENSOR_RXD "|"
   D_SENSOR_ROTARY "1a|" D_SENSOR_ROTARY "1b|" D_SENSOR_ROTARY "2a|" D_SENSOR_ROTARY "2b|"
-  "Siren|Siren & Cancel|Siren Cancel|"
+  "Siren|Siren & Cancel|Siren Cancel|MQx Power|MQ-7 Heat|"
   ;
 
 /********************************************************************************************/
@@ -595,7 +597,9 @@ const uint8_t kGpioNiceList[] PROGMEM = {
   GPIO_ARIRFRCV,        // AliLux RF Receive input
   GPIO_SIREN,
   GPIO_SIREN_WITH_CANCEL,
-  GPIO_SIREN_CANCEL
+  GPIO_SIREN_CANCEL,
+  GPIO_MQ_POWER,
+  GPIO_MQ7_HEAT
 };
 
 const uint8_t kModuleNiceList[MAXMODULE] PROGMEM = {
@@ -1967,9 +1971,9 @@ const mytmplt kModules[MAXMODULE] PROGMEM = {
      GPIO_FLAG_ADC0    // ADC0   A0 Analog input
   },
   { "Sensor Siren",
-     GPIO_USER,        // GPIO00 D3 Wemos Button Shield
+     GPIO_MQ_POWER,    // GPIO00 should be MQ-7 heat, temporarely sensors power (unused)
      GPIO_MHZ_TXD,     // GPIO01 TX Serial RXD (MHZ-19b sensor TX)
-     GPIO_USER,        // GPIO02 D4 Wemos DHT Shield
+     GPIO_MQ7_HEAT,    // GPIO02 MQ-7 Heat on-off (should be sensors power, temporary borad wiring)
      GPIO_MHZ_RXD,     // GPIO03 RX Serial TXD (MHZ-19b sensor RX)
      GPIO_I2C_SDA,     // I2C SDA
      GPIO_I2C_SCL,     // I2C SCL
