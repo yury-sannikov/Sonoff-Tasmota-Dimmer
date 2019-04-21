@@ -1,51 +1,140 @@
 #ifndef XSNS_97
 #define XSNS_97            97
 
-uint8_t sns_mqx_has_mq7 = 1;
-uint8_t sns_mqx_has_mq2 = 1;
-uint8_t sns_mqx_has_pwr_control = 1;
-uint8_t sns_mqx_is_mq7_heating = 0;
+enum MQX_FLAGS {
+  MQXF_HAS_MQ7         = 0x0,
+  MQXF_HAS_MQ2         = 0x1,
+  MQXF_HAS_PWR_CTL     = 0x2,
+  MQXF_MQ7_HEATING     = 0x4,
+  MQXF_MQ7_READING     = 0x8,
+  MQXF_MQ2_CALIBRATING = 0x10,
+};
+// MQX_FLAGS flags
+uint16_t sns_mqx_flags = 0;
 
-// Calibrate MQ-2 on power on
-uint8_t sns_mq2_calibrating = 1;
-// ~25 seconds calibration time of MQ-2 & store coundown
-#define MQX_CALIBRATION_250MS_LOOPS 100
-uint8_t sns_mq2_calibration_loop = MQX_CALIBRATION_250MS_LOOPS;
-// Ro value (subject of calibration)
-float sns_mq2_Ro_value = 0;
+// CH4 gas slope
+float snsMqx_CH4Curve[3]  =  {2.3, 0.484, -0.3762};
 
+// CO gas slope
+float snsMqx_COCurve[3]  =  {2.0, 0, -0.6926};
 
-void snsMqx_Init(void) {
-  // Assume we always have MQ2 (settings?)
-  sns_mqx_has_mq2 = 1;
-  sns_mqx_has_mq7 = 0;
-  sns_mqx_has_pwr_control = 0;
-  sns_mqx_is_mq7_heating = 0;
-
-  // MQ-7 require separate heat contol pin. If no such pin, no MQ-7 installed
-  if (pin[GPIO_MQ7_HEAT] < 99) {
-    sns_mqx_has_mq7 = 1;
-    sns_mqx_is_mq7_heating = 1;
-    // Turn on heat mode
-    pinMode(pin[GPIO_MQ7_HEAT], OUTPUT);
-    digitalWrite(pin[GPIO_MQ7_HEAT], 1);
-  }
-
-  // If GPIO_MQ_POWER is set, enable power control
-  if (pin[GPIO_MQ_POWER] < 99) {
-    sns_mqx_has_pwr_control = 1;
-    // If set, turn power on by default
-    pinMode(pin[GPIO_MQ_POWER], OUTPUT);
-    digitalWrite(pin[GPIO_MQ_POWER], 1);
-  }
-}
-
-uint8_t snsMqx_ads1115_address = 0;
-uint8_t snsMqx_ads1115_addresses[] = { 0x48, 0x49, 0x4A, 0x4B };
+#define RL_VALUE                            (10)   // Sensors load resistance kOhms
 
 #define MQX_ADS1115_REG_CONFIG_MODE_CONTIN  (0x0000)  // Continuous conversion mode
 #define MQX_ADS1115_REG_POINTER_CONVERT     (0x00)
 #define MQX_ADS1115_REG_POINTER_CONFIG      (0x01)
+
+#define MQX_ADS1115_REG_CONFIG_CQUE_NONE    (0x0003)  // Disable the comparator and put ALERT/RDY in high state (default)
+#define MQX_ADS1115_REG_CONFIG_CLAT_NONLAT  (0x0000)  // Non-latching comparator (default)
+#define MQX_ADS1115_REG_CONFIG_PGA_4_096V   (0x0200)  // +/-4.096V range = Gain 1
+#define MQX_ADS1115_REG_CONFIG_CPOL_ACTVLOW (0x0000)  // ALERT/RDY pin is low when active (default)
+#define MQX_ADS1115_REG_CONFIG_CMODE_TRAD   (0x0000)  // Traditional comparator with hysteresis (default)
+#define MQX_ADS1115_REG_CONFIG_DR_6000SPS   (0x00E0)  // 6000 samples per second
+#define MQX_ADS1115_REG_CONFIG_MUX_SINGLE_0 (0x4000)  // Single-ended AIN0
+
+#define MQX_ADS1115_REG_CONFIG_MODE_SINGLE  (0x0100)  // Power-down single-shot mode (default)
+#define MQX_ADS1115_CONVERSIONDELAY         (8)       // CONVERSION DELAY (in mS)
+
+#define MQX_ADS1115_MV_4P096                (0.125000)
+
+// MQ7 heat on time in msec
+unsigned long sns_mq7_heat_start = 0;
+
+// ADS1115 I2C address
+uint8_t snsMqx_ads1115_address = 0;
+// ADS1115 I2C addresses map
+uint8_t snsMqx_ads1115_addresses[] = { 0x48, 0x49, 0x4A, 0x4B };
+
+#define MQX_CALIBRATION_250MS_LOOPS 100
+uint8_t sns_mq2_calibration_loop = MQX_CALIBRATION_250MS_LOOPS;
+
+float mq2_read_ppm;
+
+void snsMqx_Init(void) {
+  sns_mqx_flags = MQXF_HAS_MQ2;
+
+  // MQ-7 require separate heat contol pin. If no such pin, no MQ-7 installed
+  if (pin[GPIO_MQ7_HEAT] < 99) {
+    sns_mqx_flags |= MQXF_HAS_MQ7;
+    // Turn on heat mode
+    pinMode(pin[GPIO_MQ7_HEAT], OUTPUT);
+    snsMqx_MQ7Heat(true);
+  }
+
+  // If GPIO_MQ_POWER is set, enable power control
+  if (pin[GPIO_MQ_POWER] < 99) {
+    sns_mqx_flags |= MQXF_HAS_PWR_CTL;
+    // If set, turn power on/off according to the settings
+    pinMode(pin[GPIO_MQ_POWER], OUTPUT);
+    digitalWrite(pin[GPIO_MQ_POWER], Settings.snsMqx.mqx_powered);
+  }
+}
+
+void snsMqx_MQ7Heat(bool isHeat) {
+
+  sns_mqx_flags &= ~(MQXF_MQ7_HEATING | MQXF_MQ7_READING);
+  sns_mqx_flags |= isHeat ? MQXF_MQ7_HEATING : 0;
+
+  sns_mq7_heat_start = millis();
+  digitalWrite(pin[GPIO_MQ7_HEAT], (sns_mqx_flags & MQXF_MQ7_HEATING) ? HIGH : LOW);
+}
+
+float sns_mqx_mq7_read_kOhm = 0;
+float sns_mqx_mq7_read_kOhm_start = 0;
+
+void snsMqx_MQ7Heat_step(void) {
+  unsigned long diff = millis() - sns_mq7_heat_start;
+  bool isReading = sns_mqx_flags & MQXF_MQ7_READING;
+  if (sns_mqx_flags & MQXF_MQ7_HEATING) {
+    if (diff > 60000) {
+      snsMqx_MQ7Heat(false);
+    }
+  } else {
+    if (!isReading && diff > 80000) {
+      sns_mqx_flags |= MQXF_MQ7_READING;
+      sns_mqx_mq7_read_kOhm = 0;
+    }
+    if (diff > 90000) {
+      snsMqx_MQ7Heat(true);
+      // Recalibrate MQ7
+      snsMqx_MQ7_calibrate();
+    }
+  }
+  if (isReading) {
+    snsMqx_MQ7Heat_read();
+  }
+}
+// Read last sensor value to calculate Ro
+void snsMqx_MQ7_calibrate(void) {
+  if (Settings.snsMqx.mq7_kohm_max > sns_mqx_mq7_read_kOhm) {
+    // If Ro value was not calculated, print warning
+    if (Settings.snsMqx.mq7_Ro_value < 0.1) {
+      AddLog_P2(LOG_LEVEL_INFO, PSTR("Unable to calibrate MQ7. Too high CO PPM concentration"));
+    }
+    return;
+  }
+  Settings.snsMqx.mq7_kohm_max = sns_mqx_mq7_read_kOhm;
+  Settings.snsMqx.mq7_Ro_value = sns_mqx_mq7_read_kOhm / Settings.snsMqx.mq7_clean_air_factor;
+  Settings.snsMqx.mq7_Ro_date = LocalTime();
+
+  char str_ro[24];
+  dtostrf(Settings.snsMqx.mq7_Ro_value, 6, 2, str_ro);
+  char str_kohm[24];
+  dtostrf(Settings.snsMqx.mq7_kohm_max, 6, 2, str_kohm);
+  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: New MQ-7 Ro=%s kOhm derived from Rs=%s kOhm"), str_ro, str_kohm);
+}
+
+void snsMqx_MQ7Heat_read(void) {
+  int mq7_raw = snsMqx_Ads1115GetConversion(1);
+  float mq7Resistance = snsMqx_ResistanceCalculation((float)mq7_raw);
+  if (sns_mqx_mq7_read_kOhm < 0.01) {
+    sns_mqx_mq7_read_kOhm = mq7Resistance;
+    sns_mqx_mq7_read_kOhm_start = mq7Resistance;
+  } else {
+    sns_mqx_mq7_read_kOhm *= 0.9;
+    sns_mqx_mq7_read_kOhm += 0.1 * mq7Resistance;
+  }
+}
 
 void snsMqx_Ads1115Detect(void)
 {
@@ -69,14 +158,6 @@ void snsMqx_Ads1115Detect(void)
   }
 }
 
-#define MQX_ADS1115_REG_CONFIG_CQUE_NONE    (0x0003)  // Disable the comparator and put ALERT/RDY in high state (default)
-#define MQX_ADS1115_REG_CONFIG_CLAT_NONLAT  (0x0000)  // Non-latching comparator (default)
-#define MQX_ADS1115_REG_CONFIG_PGA_4_096V   (0x0200)  // +/-4.096V range = Gain 1
-#define MQX_ADS1115_REG_CONFIG_CPOL_ACTVLOW (0x0000)  // ALERT/RDY pin is low when active (default)
-#define MQX_ADS1115_REG_CONFIG_CMODE_TRAD   (0x0000)  // Traditional comparator with hysteresis (default)
-#define MQX_ADS1115_REG_CONFIG_DR_6000SPS   (0x00E0)  // 6000 samples per second
-#define MQX_ADS1115_REG_CONFIG_MUX_SINGLE_0 (0x4000)  // Single-ended AIN0
-
 void snsMqx_Ads1115StartComparator(uint8_t channel, uint16_t mode)
 {
   // Start with default values
@@ -95,9 +176,6 @@ void snsMqx_Ads1115StartComparator(uint8_t channel, uint16_t mode)
   I2cWrite16(snsMqx_ads1115_address, MQX_ADS1115_REG_POINTER_CONFIG, config);
 }
 
-#define MQX_ADS1115_REG_CONFIG_MODE_SINGLE  (0x0100)  // Power-down single-shot mode (default)
-#define MQX_ADS1115_CONVERSIONDELAY         (8)       // CONVERSION DELAY (in mS)
-
 int16_t snsMqx_Ads1115GetConversion(uint8_t channel)
 {
   snsMqx_Ads1115StartComparator(channel, MQX_ADS1115_REG_CONFIG_MODE_SINGLE);
@@ -113,8 +191,6 @@ int16_t snsMqx_Ads1115GetConversion(uint8_t channel)
   return (int16_t)res;
 }
 
-#define RL_VALUE                     (10)   // Sensors load resistance kOhms
-
 float snsMqx_ResistanceCalculation(float raw_adc)
 {
   float maxADC = snsMqx_Ads1115GetConversion(2);
@@ -124,21 +200,12 @@ float snsMqx_ResistanceCalculation(float raw_adc)
   return (((float)RL_VALUE * (maxADC - raw_adc) / raw_adc));
 }
 
-float snsMqx_CH4Curve[3]  =  {2.3, 0.484, -0.3762  };
 float snsMqx_GetPercentage(float rs_ro_ratio, float *curve)
 {
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("GET PCT: rs_ro_ratio=%d, curve[0,1,2]=%d,%d,%d"),
-    (int)(rs_ro_ratio * 100.0),
-    (int)(curve[0] * 100.0),
-    (int)(curve[1] * 100.0),
-    (int)(curve[2] * 100.0));
-
   //Using slope,ratio(y2) and another point(x1,y1) on line we will find
   // gas concentration(x2) using x2 = [((y2-y1)/slope)+x1]
   // as in curves are on logarithmic coordinate, power of 10 is taken to convert result to non-logarithmic.
-  float exp_val = ((log(rs_ro_ratio) - curve[1]) / curve[2]) + curve[0];
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("GET PCT: exp_val = %d"),
-    (int)(exp_val * 100.0));
+  float exp_val = (((log(rs_ro_ratio) / 2.302585) - curve[1]) / curve[2]) + curve[0];
   return pow(10, exp_val);
 }
 
@@ -146,7 +213,6 @@ float snsMqx_GetPercentage(float rs_ro_ratio, float *curve)
 
 const char HTTP_MQX_ANALOG[] PROGMEM = "%s{s}%s %s{m}%d (%s kOhm) %s PPM{e}";                               // {s} = <tr><th>, {m} = </th><td>, {e} = </td></tr>
 
-#define MQX_ADS1115_MV_4P096            0.125000
 void snsMqx_Show(void) {
 
   if (!snsMqx_ads1115_address) {
@@ -159,56 +225,78 @@ void snsMqx_Show(void) {
 }
 
 void snsMqx_ShowMQ2(void) {
-  if (sns_mq2_calibrating || sns_mq2_Ro_value < .1) {
+  bool isCalibrating = sns_mqx_flags & MQXF_MQ2_CALIBRATING;
+  if (isCalibrating || Settings.snsMqx.mq2_Ro_value < .1) {
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s{s}Calibrating MQ-2...{m}%d{e}"), mqtt_data, sns_mq2_calibration_loop);
     return;
   }
 
   int mq2_raw = snsMqx_Ads1115GetConversion(0);
   float mq2_kOhm = snsMqx_ResistanceCalculation((float)mq2_raw);
-  float mq2_ppm = snsMqx_GetPercentage(mq2_kOhm / sns_mq2_Ro_value, snsMqx_CH4Curve);
+  mq2_read_ppm = snsMqx_GetPercentage(mq2_kOhm / Settings.snsMqx.mq2_Ro_value, snsMqx_CH4Curve);
 
   char label[15];
-  snprintf_P(label, sizeof(label), "ADS1115(%02x)", snsMqx_ads1115_address);
+  snprintf_P(label, sizeof(label), "MQ-2 (%02x)", snsMqx_ads1115_address);
 
   char str_res[24];
   dtostrf(mq2_kOhm, 6, 2, str_res);
   char str_ppm[24];
-  dtostrf(mq2_ppm, 6, 4, str_ppm);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "MQ-2", mq2_raw, str_res, str_ppm);
+  dtostrf(mq2_read_ppm, 6, 4, str_ppm);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "", mq2_raw, str_res, str_ppm);
 }
 
 void snsMqx_ShowMQ7(void) {
-
   char label[15];
-  snprintf_P(label, sizeof(label), "ADS1115(%02x)", snsMqx_ads1115_address);
-  char str_volt[24];
+  snprintf_P(label, sizeof(label), "MQ-7 (%02x)", snsMqx_ads1115_address);
 
-  int16_t mq7 = snsMqx_Ads1115GetConversion(1);
-  int16_t vref = snsMqx_Ads1115GetConversion(2);
+  char status[32];
+  snprintf_P(status, sizeof(status), "%s %s",
+    sns_mqx_flags & MQXF_MQ7_HEATING ? "Heat" : "Cool",
+    sns_mqx_flags & MQXF_MQ7_READING ? "(R)" : ""
+  );
 
-  dtostrf(snsMqx_ResistanceCalculation((float)mq7), 6, 2, str_volt);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "MQ-7", mq7, str_volt, "-");
+  char str_resistance[24];
+  dtostrf(sns_mqx_mq7_read_kOhm, 6, 2, str_resistance);
 
-  dtostrf((float)vref * MQX_ADS1115_MV_4P096, 5, 1, str_volt);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "VREF", vref, str_volt, "-");
+  char str_resistance_st[24];
+  dtostrf(sns_mqx_mq7_read_kOhm_start, 6, 2, str_resistance_st);
+
+  char str_res[64];
+  snprintf_P(str_res, sizeof(str_res), "[%s %s]", str_resistance_st, str_resistance);
+
+  unsigned long diff = millis() - sns_mq7_heat_start;
+  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, status, diff / 1000, str_res, "-");
+
+  if (Settings.snsMqx.mq7_Ro_value < 0.01) {
+    return;
+  }
+  // Rs(1ppm) = 443 kOhm
+  // Ro = ~ 15.653
+  // Rs/Ro = 28.3
+  float mq7_ppm1 = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm_start / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
+  float mq7_ppm2 = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
+
+  char str_ppm1[24];
+  dtostrf(mq7_ppm1, 6, 4, str_ppm1);
+  char str_ppm2[24];
+  dtostrf(mq7_ppm2, 6, 4, str_ppm2);
+  snprintf_P(str_res, sizeof(str_res), "%s .. %s", str_ppm1, str_ppm2);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "PPM", 0, "-", str_res);
+
 }
 
 #endif  // USE_WEBSERVER
 
 // Enable MQ-2 calibration
 void snsMqx_CalibrateMQ2(void) {
-  sns_mq2_calibrating = 1;
+  sns_mqx_flags |= MQXF_MQ2_CALIBRATING;
   sns_mq2_calibration_loop = MQX_CALIBRATION_250MS_LOOPS;
   AddLog_P(LOG_LEVEL_DEBUG, PSTR("MQX: Start MQ-2 calibration"));
 }
 
-// Update MQ-2 calibration
-#define RO_CLEAN_AIR_FACTOR          (9.83)   //(Sensor resistance in clean air)/RO,
-                                              //which is derived from the chart in datasheet
-float sns_mq2_InitialResistance_value;
+float sns_mq2_Resistance = 0;
 void snsMqx_CalibrateMQ2_step(void) {
-  if (!sns_mq2_calibrating) {
+  if (sns_mqx_flags & MQXF_MQ2_CALIBRATING == 0) {
     return;
   }
 
@@ -216,32 +304,114 @@ void snsMqx_CalibrateMQ2_step(void) {
   if (mq2Resistance <= 0) {
     return;
   }
-  // Reuse sns_mq2_Ro_value for the MQ-2 resistance during the calibration
-  if (sns_mq2_Ro_value == 0) {
-    sns_mq2_Ro_value = mq2Resistance;
-    sns_mq2_InitialResistance_value = mq2Resistance;
+  if (sns_mq2_Resistance == 0) {
+    sns_mq2_Resistance = mq2Resistance;
   } else {
-    sns_mq2_Ro_value *= 0.9;                  // applying exponential smoothing, A = 0.1
-    sns_mq2_Ro_value += 0.1 * mq2Resistance;
+    sns_mq2_Resistance *= 0.9;                  // applying exponential smoothing, A = 0.1
+    sns_mq2_Resistance += 0.1 * mq2Resistance;
   }
 
-  if (--sns_mq2_calibration_loop == 0) {
-    sns_mq2_calibrating = 0;
-    char str_tmp[24];
-
-    dtostrf(sns_mq2_InitialResistance_value, 6, 2, str_tmp);
-    snprintf_P(log_data, sizeof(log_data), PSTR("MQX: End MQ-2 calibration. R(Start): %s"), str_tmp);
-
-    dtostrf(sns_mq2_Ro_value, 6, 2, str_tmp);
-    snprintf_P(log_data, sizeof(log_data), PSTR("%s, R(Avg): %s"), log_data, str_tmp);
-
-    sns_mq2_Ro_value /= RO_CLEAN_AIR_FACTOR;
-
-    dtostrf(sns_mq2_Ro_value, 6, 2, str_tmp);
-    snprintf_P(log_data, sizeof(log_data), PSTR("%s, Ro=%s"), log_data, str_tmp);
-
-    AddLog(LOG_LEVEL_DEBUG);
+  if (--sns_mq2_calibration_loop > 0) {
+    return;
   }
+  sns_mqx_flags &= ~MQXF_MQ2_CALIBRATING;
+
+  char str_tmp[32];
+  dtostrf(sns_mq2_Resistance, 6, 2, str_tmp);
+  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: End MQ-2 calibration. R(Avg): %s"), str_tmp);
+
+  if (Settings.snsMqx.mq2_kohm_max > sns_mq2_Resistance) {
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: Unable to calibrate MQ-2. High PPM value"));
+    return;
+  }
+
+  Settings.snsMqx.mq2_kohm_max = sns_mq2_Resistance;
+  Settings.snsMqx.mq2_Ro_value = sns_mq2_Resistance / Settings.snsMqx.mq2_clean_air_factor;
+  Settings.snsMqx.mq2_Ro_date = LocalTime();
+
+  dtostrf(Settings.snsMqx.mq2_Ro_value, 6, 2, str_tmp);
+  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: New MQ-2 Ro=%s"), str_tmp);
+}
+
+#define MQX_SETTINGS_MAGIC (422)
+
+void snsMqx_CheckSettings (void) {
+  if (Settings.snsMqx.hdr_magic == MQX_SETTINGS_MAGIC) {
+    return;
+  }
+
+  memset(&Settings.snsMqx, 0, sizeof(Settings.snsMqx));
+
+  Settings.snsMqx.hdr_magic = MQX_SETTINGS_MAGIC;
+
+  Settings.snsMqx.mqx_powered = 1;
+
+  // Ro/Rs clean air factors
+  Settings.snsMqx.mq2_clean_air_factor = 9.83;
+  Settings.snsMqx.mq7_clean_air_factor = 28.3;
+
+  // Set sensor default max kOhm which will prevent recalibration in high PPM envronment
+  Settings.snsMqx.mq2_kohm_max = 50.0;
+  Settings.snsMqx.mq7_kohm_max = 90.0;
+
+  // Calculated Ro resistance based on read max
+  Settings.snsMqx.mq2_Ro_value = 0;
+  Settings.snsMqx.mq7_Ro_value = 0;
+
+  // Datest of the last calculated value. Used to deprecate Ro value and generate new one from sensor reading min.
+  Settings.snsMqx.mq7_Ro_date = 0;
+  Settings.snsMqx.mq2_Ro_date = 0;
+
+  // MQ2 Alarm
+  Settings.snsMqx.mq2_warning_level_ppm = 15.0;
+  Settings.snsMqx.mq2_alarm_level_ppm   = 30.0;
+
+  // MQ7 Alarm
+  Settings.snsMqx.mq7_warning_level_ppm = 9.0;
+  Settings.snsMqx.mq7_alarm_level_ppm = 40.0;
+  // Since MQ7 goes low pretty slow, a decreasing delta considered as
+  // removed alarm state. If it stops going down, alarm should be raised again
+  Settings.snsMqx.mq7_alarm_off_delta = 0.1;
+}
+
+void snsMqx_Telemetry_addFloat(const char* key, float value) {
+  char str_val[32];
+  dtostrf(value, 0, 3, str_val);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"%s\":\"%s\""), mqtt_data, key, str_val);
+}
+
+void snsMqx_Telemetry(void) {
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQX\":{"), mqtt_data);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"flags\":\"0x%x\""), mqtt_data, sns_mqx_flags);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"pwr\":\"%d\""), mqtt_data, Settings.snsMqx.mqx_powered);
+  if (snsMqx_ads1115_address == 0) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"error\":\"no ads1115\""), mqtt_data);
+  } else {
+    TIME_T tm;
+    // MQ2
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQ2\":{"), mqtt_data);
+    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq2_clean_air_factor);
+    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq2_kohm_max);
+    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq2_Ro_value);
+    BreakTime(Settings.snsMqx.mq2_Ro_date, tm);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
+    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq2_warning_level_ppm);
+    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq2_alarm_level_ppm);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
+
+    // MQ7
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQ7\":{"), mqtt_data);
+    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq7_clean_air_factor);
+    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq7_kohm_max);
+    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq7_Ro_value);
+    BreakTime(Settings.snsMqx.mq7_Ro_date, tm);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
+    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq7_warning_level_ppm);
+    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq7_alarm_level_ppm);
+    snsMqx_Telemetry_addFloat("alrmd",  Settings.snsMqx.mq7_alarm_off_delta);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
+  }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
 }
 
 /*********************************************************************************************\
@@ -254,16 +424,24 @@ bool Xsns97(uint8_t function)
 
   switch (function) {
     case FUNC_INIT:
+      snsMqx_CheckSettings();
       snsMqx_Init();
       break;
     case FUNC_PREP_BEFORE_TELEPERIOD:
       snsMqx_Ads1115Detect();
       break;
+    case FUNC_EVERY_50_MSECOND:
+      snsMqx_MQ7Heat_step();
+      break;
     case FUNC_EVERY_250_MSECOND:
-      if (sns_mq2_calibrating) {
+      if (sns_mqx_flags & MQXF_MQ2_CALIBRATING) {
         snsMqx_CalibrateMQ2_step();
       }
       break;
+    case FUNC_JSON_APPEND:
+      snsMqx_Telemetry();
+      break;
+
 #ifdef USE_WEBSERVER
       case FUNC_WEB_APPEND:
         snsMqx_Show();
