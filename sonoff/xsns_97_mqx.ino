@@ -2,12 +2,12 @@
 #define XSNS_97            97
 
 enum MQX_FLAGS {
-  MQXF_HAS_MQ7         = 0x0,
-  MQXF_HAS_MQ2         = 0x1,
-  MQXF_HAS_PWR_CTL     = 0x2,
-  MQXF_MQ7_HEATING     = 0x4,
-  MQXF_MQ7_READING     = 0x8,
-  MQXF_MQ2_CALIBRATING = 0x10,
+  MQXF_HAS_MQ7         = 0x1,
+  MQXF_HAS_MQ2         = 0x2,
+  MQXF_HAS_PWR_CTL     = 0x4,
+  MQXF_MQ7_HEATING     = 0x8,
+  MQXF_MQ7_READING     = 0x10,
+  MQXF_MQ2_CALIBRATING = 0x20,
 };
 // MQX_FLAGS flags
 uint16_t sns_mqx_flags = 0;
@@ -111,6 +111,10 @@ void snsMqx_MQ7_calibrate(void) {
     if (Settings.snsMqx.mq7_Ro_value < 0.1) {
       AddLog_P2(LOG_LEVEL_INFO, PSTR("Unable to calibrate MQ7. Too high CO PPM concentration"));
     }
+    return;
+  }
+  // Recalibrate every 12 hours
+  if ((LocalTime() - Settings.snsMqx.mq7_Ro_date) < 43200) {
     return;
   }
   Settings.snsMqx.mq7_kohm_max = sns_mqx_mq7_read_kOhm;
@@ -230,6 +234,11 @@ void getMQ2PPM(float* result) {
   int mq2_raw = snsMqx_Ads1115GetConversion(0);
   result[0] = snsMqx_ResistanceCalculation((float)mq2_raw);
   result[1] = snsMqx_GetPercentage(result[0] / Settings.snsMqx.mq2_Ro_value, snsMqx_CH4Curve);
+
+  // If MQ-2 resistance is higher than previous mq2_kohm_max after 12 hours, recalibrate
+  if (result[0] > Settings.snsMqx.mq2_kohm_max && (LocalTime() - Settings.snsMqx.mq2_Ro_date) > 43200) {
+    snsMqx_CalibrateMQ2();
+  }
 }
 
 void snsMqx_ShowMQ2(void) {
@@ -246,11 +255,6 @@ void snsMqx_ShowMQ2(void) {
 
   float results[2];
   getMQ2PPM((float*)&results);
-
-  // If MQ-2 resistance is higher than previous mq2_kohm_max after 2 minutes, recalibrate
-  if (results[0] > Settings.snsMqx.mq2_kohm_max && (LocalTime() - Settings.snsMqx.mq2_Ro_date) > 120) {
-    snsMqx_CalibrateMQ2();
-  }
 
   char label[15];
   snprintf_P(label, sizeof(label), "MQ-2 (%02x)", snsMqx_ads1115_address);
