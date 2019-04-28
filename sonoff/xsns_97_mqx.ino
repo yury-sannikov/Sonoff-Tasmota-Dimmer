@@ -484,7 +484,9 @@ bool Xsns97(uint8_t function)
       snsMqx_Ads1115Detect();
       break;
     case FUNC_EVERY_50_MSECOND:
-      snsMqx_MQ7Heat_step();
+      if (sns_mqx_flags & MQXF_HAS_MQ7) {
+        snsMqx_MQ7Heat_step();
+      }
       break;
     case FUNC_EVERY_250_MSECOND:
       if (sns_mqx_flags & MQXF_MQ2_CALIBRATING) {
