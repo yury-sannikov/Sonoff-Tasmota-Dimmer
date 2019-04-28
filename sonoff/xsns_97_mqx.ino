@@ -48,7 +48,10 @@ uint8_t snsMqx_ads1115_addresses[] = { 0x48, 0x49, 0x4A, 0x4B };
 #define MQX_CALIBRATION_250MS_LOOPS 100
 uint8_t sns_mq2_calibration_loop = MQX_CALIBRATION_250MS_LOOPS;
 
-float mq2_read_ppm;
+float sns_mqx_mq7_read_kOhm = 0;
+float sns_mqx_mq7_read_kOhm_start = 0;
+float sns_mqx_mq7_ppm_reading = 0;
+float sns_mqx_mq7_ppm_reading_start = 0;
 
 void snsMqx_Init(void) {
   sns_mqx_flags = MQXF_HAS_MQ2;
@@ -79,9 +82,6 @@ void snsMqx_MQ7Heat(bool isHeat) {
   digitalWrite(pin[GPIO_MQ7_HEAT], (sns_mqx_flags & MQXF_MQ7_HEATING) ? HIGH : LOW);
 }
 
-float sns_mqx_mq7_read_kOhm = 0;
-float sns_mqx_mq7_read_kOhm_start = 0;
-
 void snsMqx_MQ7Heat_step(void) {
   unsigned long diff = millis() - sns_mq7_heat_start;
   bool isReading = sns_mqx_flags & MQXF_MQ7_READING;
@@ -101,7 +101,7 @@ void snsMqx_MQ7Heat_step(void) {
     }
   }
   if (isReading) {
-    snsMqx_MQ7Heat_read();
+    snsMqx_MQ7_read();
   }
 }
 // Read last sensor value to calculate Ro
@@ -124,7 +124,7 @@ void snsMqx_MQ7_calibrate(void) {
   AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: New MQ-7 Ro=%s kOhm derived from Rs=%s kOhm"), str_ro, str_kohm);
 }
 
-void snsMqx_MQ7Heat_read(void) {
+void snsMqx_MQ7_read(void) {
   int mq7_raw = snsMqx_Ads1115GetConversion(1);
   float mq7Resistance = snsMqx_ResistanceCalculation((float)mq7_raw);
   if (sns_mqx_mq7_read_kOhm < 0.01) {
@@ -224,6 +224,12 @@ void snsMqx_Show(void) {
   snsMqx_ShowMQ7();
 }
 
+void getMQ2PPM(float* result) {
+  int mq2_raw = snsMqx_Ads1115GetConversion(0);
+  result[0] = snsMqx_ResistanceCalculation((float)mq2_raw);
+  result[1] = snsMqx_GetPercentage(result[0] / Settings.snsMqx.mq2_Ro_value, snsMqx_CH4Curve);
+}
+
 void snsMqx_ShowMQ2(void) {
   bool isCalibrating = sns_mqx_flags & MQXF_MQ2_CALIBRATING;
   if (isCalibrating || Settings.snsMqx.mq2_Ro_value < .1) {
@@ -231,18 +237,17 @@ void snsMqx_ShowMQ2(void) {
     return;
   }
 
-  int mq2_raw = snsMqx_Ads1115GetConversion(0);
-  float mq2_kOhm = snsMqx_ResistanceCalculation((float)mq2_raw);
-  mq2_read_ppm = snsMqx_GetPercentage(mq2_kOhm / Settings.snsMqx.mq2_Ro_value, snsMqx_CH4Curve);
+  float results[2];
+  getMQ2PPM((float*)&results);
 
   char label[15];
   snprintf_P(label, sizeof(label), "MQ-2 (%02x)", snsMqx_ads1115_address);
 
   char str_res[24];
-  dtostrf(mq2_kOhm, 6, 2, str_res);
+  dtostrf(results[0], 6, 2, str_res);
   char str_ppm[24];
-  dtostrf(mq2_read_ppm, 6, 4, str_ppm);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "", mq2_raw, str_res, str_ppm);
+  dtostrf(results[1], 6, 4, str_ppm);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "", 0, str_res, str_ppm);
 }
 
 void snsMqx_ShowMQ7(void) {
@@ -273,13 +278,13 @@ void snsMqx_ShowMQ7(void) {
   // Rs(1ppm) = 443 kOhm
   // Ro = ~ 15.653
   // Rs/Ro = 28.3
-  float mq7_ppm1 = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm_start / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
-  float mq7_ppm2 = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
+  sns_mqx_mq7_ppm_reading_start = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm_start / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
+  sns_mqx_mq7_ppm_reading = snsMqx_GetPercentage(sns_mqx_mq7_read_kOhm / Settings.snsMqx.mq7_Ro_value, snsMqx_COCurve);
 
   char str_ppm1[24];
-  dtostrf(mq7_ppm1, 6, 4, str_ppm1);
+  dtostrf(sns_mqx_mq7_ppm_reading_start, 6, 4, str_ppm1);
   char str_ppm2[24];
-  dtostrf(mq7_ppm2, 6, 4, str_ppm2);
+  dtostrf(sns_mqx_mq7_ppm_reading, 6, 4, str_ppm2);
   snprintf_P(str_res, sizeof(str_res), "%s .. %s", str_ppm1, str_ppm2);
   snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_MQX_ANALOG, mqtt_data, label, "PPM", 0, "-", str_res);
 
@@ -374,41 +379,51 @@ void snsMqx_CheckSettings (void) {
   Settings.snsMqx.mq7_alarm_off_delta = 0.1;
 }
 
-void snsMqx_Telemetry_addFloat(const char* key, float value) {
+void snsMqx_Telemetry_addFloat(const char* key, float value, bool first) {
   char str_val[32];
-  dtostrf(value, 0, 3, str_val);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"%s\":\"%s\""), mqtt_data, key, str_val);
+  dtostrf(value, 0, 2, str_val);
+  if (first) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s\"%s\":\"%s\""), mqtt_data, key, str_val);
+  } else {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"%s\":\"%s\""), mqtt_data, key, str_val);
+  }
 }
 
 void snsMqx_Telemetry(void) {
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQX\":{"), mqtt_data);
-  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"flags\":\"0x%x\""), mqtt_data, sns_mqx_flags);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s\"flags\":\"0x%x\""), mqtt_data, sns_mqx_flags);
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"pwr\":\"%d\""), mqtt_data, Settings.snsMqx.mqx_powered);
   if (snsMqx_ads1115_address == 0) {
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"error\":\"no ads1115\""), mqtt_data);
   } else {
     TIME_T tm;
+    float result[2];
+    getMQ2PPM((float*)&result);
     // MQ2
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQ2\":{"), mqtt_data);
-    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq2_clean_air_factor);
-    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq2_kohm_max);
-    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq2_Ro_value);
+    snsMqx_Telemetry_addFloat("value",  result[1], true);
+    snsMqx_Telemetry_addFloat("raw",  result[0], false);
+    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq2_clean_air_factor, false);
+    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq2_kohm_max, false);
+    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq2_Ro_value, false);
     BreakTime(Settings.snsMqx.mq2_Ro_date, tm);
-    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
-    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq2_warning_level_ppm);
-    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq2_alarm_level_ppm);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, 1970 + tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
+    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq2_warning_level_ppm, false);
+    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq2_alarm_level_ppm, false);
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
 
-    // MQ7
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQ7\":{"), mqtt_data);
-    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq7_clean_air_factor);
-    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq7_kohm_max);
-    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq7_Ro_value);
+    snsMqx_Telemetry_addFloat("value",  sns_mqx_mq7_ppm_reading, true);
+    snsMqx_Telemetry_addFloat("delta",  sns_mqx_mq7_ppm_reading - sns_mqx_mq7_ppm_reading_start, false);
+    snsMqx_Telemetry_addFloat("raw",  sns_mqx_mq7_read_kOhm, false);
+    snsMqx_Telemetry_addFloat("caf",  Settings.snsMqx.mq7_clean_air_factor, false);
+    snsMqx_Telemetry_addFloat("rmax",  Settings.snsMqx.mq7_kohm_max, false);
+    snsMqx_Telemetry_addFloat("ro",  Settings.snsMqx.mq7_Ro_value, false);
     BreakTime(Settings.snsMqx.mq7_Ro_date, tm);
-    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
-    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq7_warning_level_ppm);
-    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq7_alarm_level_ppm);
-    snsMqx_Telemetry_addFloat("alrmd",  Settings.snsMqx.mq7_alarm_off_delta);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, 1970 + tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
+    snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq7_warning_level_ppm, false);
+    snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq7_alarm_level_ppm, false);
+    snsMqx_Telemetry_addFloat("alrmd",  Settings.snsMqx.mq7_alarm_off_delta, false);
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
   }
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
