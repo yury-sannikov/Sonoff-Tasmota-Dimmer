@@ -5,79 +5,59 @@
 const char HTTP_BTN_MENU_MAIN_SIREN[] PROGMEM =
   "<br/><form action='siren' method='get'><button name='mute'>Mute Siren</button></form>"
   "<br/><form action='siren' method='get'><button name='unmute'>Unmute Siren</button></form>"
-  "<br/><form action='siren' method='get'><button name='test'>Test Siren</button></form>";
+  "<br/><form action='siren' method='get'><button name='warn'>Test Warning Siren</button></form>"
+  "<br/><form action='siren' method='get'><button name='alm'>Test Alarm Siren</button></form>";
 
 const char HTTP_SIREN_WEB[] PROGMEM = "%s"
   "{s}Siren Status{m}%s:%s{e}";
 
-const char sns_siren_Statuses[] PROGMEM = "Off|Mute|Warning|Alarm|";
-const char sns_siren_Gases[] PROGMEM = "None|CO|CO2|Flammable|";
+const char sns_siren_Statuses[] PROGMEM = "off|warning|alarm|mute|unmute|";
+const char sns_siren_Gases[] PROGMEM = "co|co2|ch4|";
 
 void sns_siren_Show(bool json)
 {
   char siren_text[48];
   char gas_text[48];
-  GetTextIndexed(gas_text, sizeof(gas_text), Siren_GetGas(), sns_siren_Gases);
-  GetTextIndexed(siren_text, sizeof(siren_text), Siren_GetStatus(), sns_siren_Statuses);
+  for (int gas = 0; gas < gasMax; gas++) {
+    GetTextIndexed(gas_text, sizeof(gas_text), gas, sns_siren_Gases);
+    GetTextIndexed(siren_text, sizeof(siren_text), Siren_GetStatus(gas), sns_siren_Statuses);
 
-  if (json) {
-    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"siren\":{\"status\":%d,\"gas\":%d,\"trep\":\"%s:%s\"}"),
-    mqtt_data, Siren_GetStatus(), Siren_GetGas(), gas_text, siren_text);
-#ifdef USE_WEBSERVER
-  } else {
-    snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SIREN_WEB, mqtt_data, gas_text, siren_text);
-#endif  // USE_WEBSERVER
+    if (json) {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"gas_%s\":{\"status\":%s\"}"),
+      mqtt_data, gas_text, Siren_GetStatus(gas), siren_text);
+  #ifdef USE_WEBSERVER
+    } else {
+      snprintf_P(mqtt_data, sizeof(mqtt_data), HTTP_SIREN_WEB, mqtt_data, gas_text, siren_text);
+  #endif  // USE_WEBSERVER
+    }
   }
 }
 
 
-int __stat = 0;
 void sns_siren_HandleWebAction(void)
 {
   if (!HttpCheckPriviledgedAccess()) { return; }
 
   if (WebServer->hasArg("mute")) {
-    Siren_SetStatusGas(sirenMute, Siren_GetGas(), false);
+    Siren_SetStatusGas(sirenMute, gasCO, true);
     HandleRoot();
     return;
   }
   if (WebServer->hasArg("unmute")) {
-    Siren_UnmuteReset();
+    Siren_UnmuteReset(true);
     HandleRoot();
     return;
   }
-
-  switch (__stat++)
-  {
-    case 0:
-      Siren_SetStatusGas(sirenOff, gasNone, false);
-      break;
-    case 1:
-      Siren_SetStatusGas(sirenWarning, gasCO, false);
-      break;
-    case 2:
-      Siren_SetStatusGas(sirenWarning, gasCO2, false);
-      break;
-    case 3:
-      Siren_SetStatusGas(sirenWarning, gasFlammable, false);
-      break;
-    case 4:
-      Siren_SetStatusGas(sirenAlarm, gasCO, false);
-      break;
-    case 5:
-      Siren_SetStatusGas(sirenAlarm, gasCO2, false);
-      break;
-    case 6:
-      Siren_SetStatusGas(sirenAlarm, gasFlammable, false);
-      break;
-    case 7:
-      Siren_SetStatusGas(sirenOff, gasNone, false);
-      __stat = 0;
-      break;
-    default:
-      break;
+  if (WebServer->hasArg("warn")) {
+    Siren_SetStatusGas(sirenWarning, gasCO, true);
+    HandleRoot();
+    return;
   }
-  HandleRoot();
+  if (WebServer->hasArg("alm")) {
+    Siren_SetStatusGas(sirenAlarm, gasCO, true);
+    HandleRoot();
+    return;
+  }
 }
 
 

@@ -6,19 +6,23 @@ uint8_t drv_siren_enabled = 1;
 
 typedef enum SirenStatus {
   sirenOff = 0,
-  sirenMute,
   sirenWarning,
   sirenAlarm,
-  sirenMAX
+  sirenMute,
+  sirenUnmute,
 } SirenStatus_t;
 
 typedef enum SirenGas {
-  gasNone = 0,
-  gasCO,
+  gasCO = 0,
   gasCO2,
   gasFlammable,
-  gasMAX
+  gasMax
 } SirenGas_t;
+
+
+uint8_t drv_siren_statuses[gasMax] = {sirenOff, sirenOff, sirenOff};
+bool drv_siren_locals[gasMax] = {true, true, true};
+
 
 // All patterns started with enabled alarm.
 // Each pattern item eq to pause in 50ms. After alarm getting inverted
@@ -61,15 +65,18 @@ int drv_siren_Selected_Pattern_Index = 0;
 int drv_siren_Selected_Pattern_Length = 0;
 
 
-SirenStatus_t drv_siren_status = sirenOff;
-SirenGas_t drv_siren_gas = gasNone;
+// An identifier of the siren module (mac address)
+char drv_siren_self[32] = { 0 };
+// Time when siren was muted
+unsigned long drv_siren_mute_time = 0;
+// Time when status update has been sent
+unsigned long drv_siren_status_time = 0;
 
 #define D_LOG_PREFIX "SRN:"
 char siren_topic[] = "siren";
 
-
-const char drv_siren_commands[] PROGMEM = "off|mute|warning|alarm|";
-const char drv_siren_gases[] PROGMEM = "none|co|co2|gas|";
+const char drv_siren_commands[] PROGMEM = "off|warning|alarm|mute|unmute|";
+const char drv_siren_gases[] PROGMEM = "co|co2|ch4|";
 
 
 void drv_siren_Init() {
@@ -98,64 +105,141 @@ void drv_siren_Init() {
   } else {
     AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "Siren disabled"));
   }
+
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  strncpy(drv_siren_self, mac.c_str(), sizeof(drv_siren_self));
 }
 
 unsigned long drv_siren_50msecond = 0;
 
-int Siren_GetStatus (void) {
-  return drv_siren_status;
-}
-int Siren_GetGas (void) {
-  return drv_siren_gas;
+int Siren_GetStatus (int gas) {
+  return drv_siren_statuses[gas];
 }
 
-void Siren_UnmuteReset() {
-  drv_siren_status = sirenOff;
-  drv_siren_gas = gasNone;
+void Siren_UnmuteReset(bool isUserAction) {
+  for (int i = 0; i < gasMax; i++) {
+    drv_siren_statuses[i] = sirenOff;
+    drv_siren_locals[i] = true;
+    if (isUserAction) {
+      drv_siren_MqttSend(sirenUnmute, i);
+    }
+  }
+  drv_siren_mute_time = 0;
+  Siren_UpdatePattern();
 }
 
-void Siren_SetStatusGas(int status, int gas, bool fromOther) {
-  if (status == sirenMute) {
-      // Log mute time to automatically disable it in the morning
-      // TODO: g_mute_time = now()
+// Decide if MQTT status update should be sent.
+// Send on status change and each minute
+bool Siren_ShouldSendUpdate(int status, int gas) {
+  if (status != drv_siren_statuses[gas] || (millis() - drv_siren_status_time) > 120000) {
+    drv_siren_status_time = millis();
+    return true;
+  }
+  return false;
+}
+
+void Siren_SetStatusGas(int status, int gas, bool isLocal) {
+  // Store muted time if muted
+  if (status == sirenMute && drv_siren_statuses[gas] != sirenMute) {
+    drv_siren_mute_time = millis();
+    drv_siren_statuses[gas] = sirenMute;
+
+    // Broadcast local update
+    if (isLocal) {
+      drv_siren_MqttSend(sirenMute, gas);
+    }
   }
 
-  if (fromOther) {
-    // Update status if foreign status have higher priority than ours
-    // or is's off/mute.
-    // off/mute never send by itself, but as a result of user interaction or condition has been improved
-    if (status > drv_siren_status || status == sirenOff || status == sirenMute) {
-      drv_siren_status = (SirenStatus_t)status;
-      drv_siren_gas = (SirenGas_t)gas;
-      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " applying foreign status: %d, gas: %d"), status, gas);
-    } else {
-      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " ignoring foreign status: %d, gas: %d"), status, gas);
+  // Do nothing if muted
+  if (drv_siren_statuses[gas] == sirenMute) {
+    if (isLocal || status != sirenUnmute) {
+      drv_siren_OnOff(false);
+      return;
+    }
+  }
+
+  // Convert unmute to off. Should come from remote only
+  if (status == sirenUnmute) {
+    if (isLocal) {
+      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "Siren_UnmuteReset should be called locally instead of passing sirenUnmute status"));
+      return;
+    }
+    drv_siren_mute_time = 0;
+    status = sirenOff;
+  }
+
+  if (drv_siren_locals[gas] == isLocal) {
+    bool shouldSend = Siren_ShouldSendUpdate(status, gas);
+    // Do not negotiate if siren source status matches
+    // For instance, if it was local alarm and become local warning, update to warning
+    // If it was remote warning and going a remote off, turn it off
+    if (drv_siren_statuses[gas] != status) {
+      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "apply %s status %d, gas %d"), isLocal ? "local" : "remote", status, gas);
+    }
+    drv_siren_statuses[gas] = (SirenStatus_t)status;
+    Siren_UpdatePattern();
+
+    // Broadcast local-only update
+    if (isLocal && shouldSend) {
+      drv_siren_MqttSend(status, gas);
     }
   } else {
-    // Do not update status for muted siren
-    if (drv_siren_status != sirenMute) {
-      drv_siren_status = (SirenStatus_t)status;
+    // Case when local and remote status does not match
+    if (status > drv_siren_statuses[gas]) {
+      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "status %d beats %d. Came from %s"), status, drv_siren_statuses[gas], isLocal ? "local" : "remote");
+      // Incoming status has higher priority (mute is highest)
+      drv_siren_statuses[gas] = (SirenStatus_t)status;
+      drv_siren_locals[gas] = isLocal;
+      Siren_UpdatePattern();
+
+      // Broadcast if local status update win
+      if (isLocal) {
+        drv_siren_MqttSend(status, gas);
+      }
     } else {
-      AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " ignore muted"));
+      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "status %d below/eq %d. Came from %s"), status, drv_siren_statuses[gas], isLocal ? "local" : "remote");
     }
-    // Update gas for muted
-    drv_siren_gas = (SirenGas_t)gas;
-    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " applying local status: %d, gas: %d"), status, gas);
   }
+}
+
+int last_status = sirenOff;
+int last_gas = -1;
+void Siren_UpdatePattern() {
+  // Calculate most important status and it's gas
+  int status = sirenOff;
+  int gas = gasMax;
+  for (int i = 0; i < gasMax; i++) {
+    if (drv_siren_statuses[i] > status) {
+      status = drv_siren_statuses[i];
+      gas = i;
+    }
+  }
+  // If status and gas was the same, do nothing not to break sound patterns
+  if (status == last_status && gas == last_gas) {
+    return;
+  }
+
+  last_status = status;
+  last_gas = gas;
 
   drv_siren_Selected_Pattern_Index = 0;
   drv_siren_Selected_Pattern_Length = 0;
   drv_siren_Selected_Pattern = NULL;
-  drv_siren_50msecond = 9;
+  drv_siren_50msecond = 0;
+
   switch (status)
   {
     case sirenMute:
+    case sirenUnmute:
     case sirenOff:
       drv_siren_OnOff(false);
+      drv_siren_Selected_Pattern = NULL;
+      drv_siren_Selected_Pattern_Length = 0;
     break;
     case sirenWarning:
     {
-      switch(drv_siren_gas) {
+      switch(gas) {
         case gasCO:
           drv_siren_Selected_Pattern = drv_siren_CO_WARNING_pattern;
           drv_siren_Selected_Pattern_Length = sizeof(drv_siren_CO_WARNING_pattern) / sizeof(uint16_t);
@@ -172,7 +256,7 @@ void Siren_SetStatusGas(int status, int gas, bool fromOther) {
     }
     break;
     case sirenAlarm: {
-      switch(drv_siren_gas) {
+      switch(gas) {
         case gasCO:
           drv_siren_Selected_Pattern = drv_siren_CO_ALARM_pattern;
           drv_siren_Selected_Pattern_Length = sizeof(drv_siren_CO_ALARM_pattern) / sizeof(uint16_t);
@@ -197,10 +281,6 @@ void Siren_SetStatusGas(int status, int gas, bool fromOther) {
     drv_siren_OnOff(true);
     drv_siren_50msecond = millis() + (50ul * (unsigned long)drv_siren_Selected_Pattern[drv_siren_Selected_Pattern_Index++]);
   }
-  if (!fromOther) {
-    // Send status update
-    drv_siren_MqttSend();
-  }
 }
 
 void drv_siren_OnOff(bool isOn) {
@@ -211,7 +291,6 @@ void drv_siren_OnOff(bool isOn) {
     digitalWrite(pin[GPIO_SIREN_WITH_CANCEL], isOn ? 1 : 0);
   }
 }
-
 
 void drv_siren_Loop() {
   if (drv_siren_Selected_Pattern == NULL) {
@@ -231,27 +310,25 @@ void drv_siren_Loop() {
 }
 
 void drv_siren_MqttSubscribe(void) {
-  // Report status on reconnect
-  if (drv_siren_status == sirenWarning || drv_siren_status == sirenAlarm) {
-    drv_siren_MqttSend();
-  }
-
   char stopic[TOPSZ];
   snprintf_P(stopic, sizeof(stopic), PSTR("%s/#"), siren_topic);
   MqttSubscribe(stopic);
 }
 
-void drv_siren_MqttSend(void) {
+void drv_siren_MqttSend(int status, int gas) {
   // Get command
   char cmd_to_send[25];
-  GetTextIndexed(cmd_to_send, sizeof(cmd_to_send), Siren_GetStatus(), drv_siren_commands);
+  GetTextIndexed(cmd_to_send, sizeof(cmd_to_send), status, drv_siren_commands);
 
   // Get topic - siren/{command}
   char topic_to_send[25];
   snprintf_P(topic_to_send, sizeof(topic_to_send), PSTR("%s/%s"), siren_topic, cmd_to_send);
 
   // Get Gas as payload
-  GetTextIndexed(mqtt_data, sizeof(mqtt_data), Siren_GetGas(), drv_siren_gases);
+  char gas_to_send[25];
+  GetTextIndexed(gas_to_send, sizeof(gas_to_send), gas, drv_siren_gases);
+
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,%s"), gas_to_send, drv_siren_self);
 
   AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " send: %s %s"), topic_to_send, mqtt_data);
 
@@ -264,7 +341,7 @@ bool drv_siren_MqttData(void)
   if (strncmp(XdrvMailbox.topic, siren_topic, strlen(siren_topic))) {
     return false;
   }
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " MQTT DATA:%s TOPIC:%s, LEN:%d"), XdrvMailbox.data, XdrvMailbox.topic, XdrvMailbox.data_len);
+  // AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " MQTT DATA:%s TOPIC:%s, LEN:%d"), XdrvMailbox.data, XdrvMailbox.topic, XdrvMailbox.data_len);
 
   char command[CMDSZ];
   int status_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic + strlen(siren_topic) + 1, drv_siren_commands);
@@ -273,17 +350,27 @@ bool drv_siren_MqttData(void)
     return false;
   }
 
+  char sub_string[XdrvMailbox.data_len + 1];
+  char* gas_str = subStr(sub_string, XdrvMailbox.data, ",", 1);
+  char* source_str = subStr(sub_string, XdrvMailbox.data, ",", 2);
+
+  // Skip message sent by itself
+  if (strncmp(source_str, drv_siren_self, sizeof(drv_siren_self)) == 0) {
+    return false;
+  }
+
   char gas[CMDSZ];
-  int gas_code = GetCommandCode(gas, sizeof(gas), XdrvMailbox.data, drv_siren_gases);
+  int gas_code = GetCommandCode(gas, sizeof(gas),gas_str, drv_siren_gases);
   if (-1 == gas_code) {
     AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "Unknown gas"));
     return false;
   }
 
-  if (status_code != drv_siren_status || gas_code != drv_siren_gas) {
-    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " passing foreign status: %d, gas: %d"), status_code, gas_code);
-    Siren_SetStatusGas(status_code, gas_code, true);
+  if (drv_siren_statuses[gas_code] != status_code) {
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " Got %s %s from %s"), XdrvMailbox.topic, gas_str, source_str);
+    Siren_SetStatusGas(status_code, gas_code, false);
   }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("OK"));
   return true;
 }
 
@@ -311,6 +398,12 @@ bool Xdrv95(uint8_t function)
       break;
     case FUNC_MQTT_DATA:
       result = drv_siren_MqttData();
+      break;
+    case FUNC_EVERY_SECOND:
+      // Unmute siren after 8 hours, if mute is set
+      if (drv_siren_mute_time != 0 && millis() - drv_siren_mute_time > 1000 * 60 * 60 * 8) {
+        Siren_UnmuteReset(false);
+      }
       break;
   }
   return result;
