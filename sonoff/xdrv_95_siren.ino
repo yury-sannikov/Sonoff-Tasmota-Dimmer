@@ -81,6 +81,17 @@ const char drv_siren_gases[] PROGMEM = "co|co2|ch4|";
 
 void drv_siren_Init() {
   drv_siren_enabled = 0;
+  drv_siren_mute_time = 0;
+  drv_siren_Selected_Pattern = NULL;
+  drv_siren_Selected_Pattern_Index = 0;
+  drv_siren_Selected_Pattern_Length = 0;
+
+  memset(drv_siren_statuses, 0, sizeof(drv_siren_statuses));
+  for (int i = 0; i < gasMax; ++i) {
+    drv_siren_statuses[i] = sirenOff;
+    drv_siren_locals[i] = true;
+
+  }
 
   if (pin[GPIO_SIREN] < 99) {
     drv_siren_enabled = 1;
@@ -126,7 +137,14 @@ void Siren_UnmuteReset(bool isUserAction) {
     }
   }
   drv_siren_mute_time = 0;
+  drv_siren_status_time = 0;
   Siren_UpdatePattern();
+}
+
+void Siren_Mute() {
+  for (int i = 0; i < gasMax; i++) {
+    Siren_SetStatusGas(sirenMute, i, true);
+  }
 }
 
 // Decide if MQTT status update should be sent.
@@ -154,7 +172,7 @@ void Siren_SetStatusGas(int status, int gas, bool isLocal) {
   // Do nothing if muted
   if (drv_siren_statuses[gas] == sirenMute) {
     if (isLocal || status != sirenUnmute) {
-      drv_siren_OnOff(false);
+      Siren_UpdatePattern();
       return;
     }
   }
@@ -167,6 +185,7 @@ void Siren_SetStatusGas(int status, int gas, bool isLocal) {
     }
     drv_siren_mute_time = 0;
     status = sirenOff;
+    drv_siren_statuses[gas] = (SirenStatus_t)status;
   }
 
   if (drv_siren_locals[gas] == isLocal) {
@@ -197,8 +216,6 @@ void Siren_SetStatusGas(int status, int gas, bool isLocal) {
       if (isLocal) {
         drv_siren_MqttSend(status, gas);
       }
-    } else {
-      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "status %d below/eq %d. Came from %s"), status, drv_siren_statuses[gas], isLocal ? "local" : "remote");
     }
   }
 }

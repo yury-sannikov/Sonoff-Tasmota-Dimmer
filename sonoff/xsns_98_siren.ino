@@ -2,6 +2,9 @@
 #define XSNS_98            98
 
 
+const char HTTP_BTN_MENU_BUTTON_SIREN[] PROGMEM =
+  "<br/><form action='sirencfg' method='get'><button name='mute'>Siren Config</button></form>";
+
 const char HTTP_BTN_MENU_MAIN_SIREN[] PROGMEM =
   "<br/><form action='siren' method='get'><button name='mute'>Mute Siren</button></form>"
   "<br/><form action='siren' method='get'><button name='unmute'>Unmute Siren</button></form>"
@@ -39,7 +42,7 @@ void sns_siren_HandleWebAction(void)
   if (!HttpCheckPriviledgedAccess()) { return; }
 
   if (WebServer->hasArg("mute")) {
-    Siren_SetStatusGas(sirenMute, gasCO, true);
+    Siren_Mute();
     HandleRoot();
     return;
   }
@@ -60,6 +63,15 @@ void sns_siren_HandleWebAction(void)
   }
 }
 
+void sns_HandleSirenConfiguration(void)
+{
+  WSContentStart_P(PSTR("Siren Configuration"));
+  WSContentSendStyle();
+  WSContentSend_P(HTTP_BTN_MENU_MAIN_SIREN);
+  WSContentSpaceButton(BUTTON_MAIN);
+  WSContentStop();
+}
+
 
 /*********************************************************************************************\
  * Interface
@@ -78,10 +90,11 @@ bool Xsns98(uint8_t function)
       sns_siren_Show(0);
       break;
     case FUNC_WEB_ADD_MAIN_BUTTON:
-      WSContentSend_P(HTTP_BTN_MENU_MAIN_SIREN);
+      WSContentSend_P(HTTP_BTN_MENU_BUTTON_SIREN);
       break;
     case FUNC_WEB_ADD_HANDLER:
       WebServer->on("/siren", sns_siren_HandleWebAction);
+      WebServer->on("/sirencfg", sns_HandleSirenConfiguration);
       break;
 #endif  // USE_WEBSERVER
   }
