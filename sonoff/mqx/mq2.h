@@ -27,7 +27,7 @@ class MQ2Sensor {
         void start();
 
         // A step function to maintain calibration
-        void step();
+        bool step();
 
         // Set default settings
         static void setDefaults(SNSMQx_Settings* settings);

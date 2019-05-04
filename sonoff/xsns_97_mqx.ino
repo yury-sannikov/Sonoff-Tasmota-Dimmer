@@ -186,22 +186,12 @@ void snsMqx_check_alarm_for(float value, int gasType, float alarmLevel, float wa
   }
 
   if (value >= alarmLevel) {
-    if (Siren_GetStatus(gasType) != sirenAlarm) {
-      AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: GAS ALARM %d"), gasType);
-    }
     Siren_SetStatusGas(sirenAlarm, gasType, true);
   } else {
-
     // Set warning if above warning or clear
     if (value > warningLevel) {
-      if (Siren_GetStatus(gasType) != sirenWarning) {
-        AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: GAS WARNING %d"), gasType);
-      }
       Siren_SetStatusGas(sirenWarning, gasType, true);
     } else {
-      if (Siren_GetStatus(gasType) == sirenWarning) {
-        AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: GAS warning dismiss %d"), gasType);
-      }
       Siren_SetStatusGas(sirenOff, gasType, true);
     }
 
@@ -261,10 +251,19 @@ bool Xsns97(uint8_t function)
 
     case FUNC_EVERY_250_MSECOND:
       if (mgx_mq7_sensor) {
-        mgx_mq7_sensor->step();
+        // Do not run MQ7 sensor step if MQ2 is calibrating.
+        if (!mgx_mq2_sensor || !mgx_mq2_sensor->isCalibrating()) {
+          if (mgx_mq7_sensor->step()) {
+            // Exit if reading occur
+            return result;
+          }
+        }
       }
       if (mgx_mq2_sensor) {
-        mgx_mq2_sensor->step();
+        // No not run MQ2 step if MQ7 is reading
+        if (!mgx_mq7_sensor || !mgx_mq7_sensor->isReading()) {
+          mgx_mq2_sensor->step();
+        }
       }
       break;
     case FUNC_JSON_APPEND:

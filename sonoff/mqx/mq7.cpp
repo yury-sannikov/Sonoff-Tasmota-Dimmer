@@ -37,7 +37,7 @@ void MQ7Sensor::setHeat(bool isHeat) {
   digitalWrite(pin[GPIO_MQ7_HEAT], (m_flags & MQ7_HEATING) ? HIGH : LOW);
 }
 
- void MQ7Sensor::step() {
+ bool MQ7Sensor::step() {
   unsigned long diff = millis() - m_heat_start_mills;
   bool isReading = (m_flags & MQ7_READING);
   if (m_flags & MQ7_HEATING) {
@@ -59,7 +59,9 @@ void MQ7Sensor::setHeat(bool isHeat) {
   }
   if (isReading) {
     updateResistance();
+    return true;
   }
+  return false;
 }
 
 void MQ7Sensor::calibrate() {

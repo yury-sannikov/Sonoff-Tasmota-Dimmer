@@ -23,8 +23,8 @@ class MQ7Sensor {
         MQ7Sensor(SNSMQx_Settings* settings, ADS1115Reader& reader);
         // Start MQ7 sensor heat & cool cycles
         void start();
-        // A step function to maintain heat/cool cycles
-        void step();
+        // A step function to maintain heat/cool cycles. Return true if reading occur
+        bool step();
         // Set default settings
         static void setDefaults(SNSMQx_Settings* settings);
 

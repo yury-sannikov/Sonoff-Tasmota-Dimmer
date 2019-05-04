@@ -14,6 +14,7 @@ uint8_t snsMqx_ads1115_addresses[4] = { 0x48, 0x49, 0x4A, 0x4B };
 ADS1115Reader::ADS1115Reader() {
   m_address = 0;
   m_referenceVoltage = 0;
+  m_cont_channel = -1;
 }
 
 uint8_t ADS1115Reader::detectAddress() {
@@ -30,6 +31,11 @@ uint8_t ADS1115Reader::detectAddress() {
       startComparator(i, MQX_ADS1115_REG_CONFIG_MODE_CONTIN);
       AddLog_P2(LOG_LEVEL_DEBUG, S_LOG_I2C_FOUND_AT, "MQX: ADS1115", address);
     }
+  }
+
+  if (m_address) {
+    // Read reference voltage
+    m_referenceVoltage = getConversion(VREF_CHANNEL);
   }
 
   return m_address;
@@ -54,14 +60,20 @@ void ADS1115Reader::startComparator(uint8_t channel, uint16_t mode) {
 
 
 int16_t ADS1115Reader::getConversion(uint8_t channel) {
-  startComparator(channel, MQX_ADS1115_REG_CONFIG_MODE_SINGLE);
-  // Wait for the conversion to complete
-  delay(MQX_ADS1115_CONVERSIONDELAY);
-  // Read the conversion results
-  I2cRead16(m_address, MQX_ADS1115_REG_POINTER_CONVERT);
+  // Do not restart ADS1115 if the same channel is reading
+  if (channel != m_cont_channel) {
+    m_cont_channel = channel;
 
-  startComparator(channel, MQX_ADS1115_REG_CONFIG_MODE_CONTIN);
-  delay(MQX_ADS1115_CONVERSIONDELAY);
+    startComparator(channel, MQX_ADS1115_REG_CONFIG_MODE_SINGLE);
+    // Wait for the conversion to complete
+    delay(MQX_ADS1115_CONVERSIONDELAY);
+    // Read the conversion results
+    I2cRead16(m_address, MQX_ADS1115_REG_POINTER_CONVERT);
+
+    startComparator(channel, MQX_ADS1115_REG_CONFIG_MODE_CONTIN);
+    delay(MQX_ADS1115_CONVERSIONDELAY);
+  }
+
   // Read the conversion results
   uint16_t res = I2cRead16(m_address, MQX_ADS1115_REG_POINTER_CONVERT);
   return (int16_t)res;

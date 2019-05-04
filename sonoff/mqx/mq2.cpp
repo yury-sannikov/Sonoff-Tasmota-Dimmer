@@ -26,8 +26,8 @@ void MQ2Sensor::start() {
     }
 }
 
-// A step function to maintain calibration
-void MQ2Sensor::step() {
+// A step function to maintain calibration. Return true if reading occur
+bool MQ2Sensor::step() {
   if (!isCalibrating()) {
     if (m_ppm_loop-- == 0) {
         m_ppm_loop = MQ2_CALCULATE_PPM_250MS_LOOPS;
@@ -35,17 +35,18 @@ void MQ2Sensor::step() {
         // Start recalibration if no valid Ro value
         if (m_settings->mq2_Ro_value < 0.01 || isinf(m_settings->mq2_Ro_value)) {
             calibrate();
-            return;
+            return false;
         }
 
         updatePPM();
+        return true;
     }
-    return;
+    return false;
   }
 
   float mq2Resistance = m_reader.calculateResistance(MQ2_CHANNEL);
   if (mq2Resistance <= 0) {
-    return;
+    return true;
   }
 
   if (m_resistance == 0) {
@@ -56,7 +57,7 @@ void MQ2Sensor::step() {
   }
 
   if (m_calibration_loop-- > 0) {
-    return;
+    return true;
   }
   m_flags &= ~MQ2_CALIBRATING;
 
@@ -73,7 +74,7 @@ void MQ2Sensor::step() {
     if (m_settings->mq2_Ro_value < 0.01) {
       AddLog_P2(LOG_LEVEL_INFO, PSTR("MQX: Unable to calibrate MQ-2: High PPM value"));
     }
-    return;
+    return true;
   }
 
   m_settings->mq2_kohm_max = m_resistance;
@@ -82,6 +83,7 @@ void MQ2Sensor::step() {
 
   dtostrf(m_settings->mq2_Ro_value, 6, 2, str_tmp);
   AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: New MQ-2 Ro=%s"), str_tmp);
+  return true;
 }
 
 void MQ2Sensor::updatePPM() {
@@ -91,8 +93,9 @@ void MQ2Sensor::updatePPM() {
   // If MQ-2 resistance is higher than previous mq2_kohm_max after 12 hours, recalibrate
   if (m_resistance > m_settings->mq2_kohm_max && (LocalTime() - m_settings->mq2_Ro_date) > 43200) {
     calibrate();
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: Calibrate due to max & time"));
   }
-  m_ppm_smoothed = 0.99 * m_ppm_smoothed + 0.01 * m_ppm;
+  m_ppm_smoothed = 0.95 * m_ppm_smoothed + 0.05 * m_ppm;
 }
 
 // Set default settings

@@ -51,6 +51,7 @@ class ADS1115Reader {
     private:
         int16_t m_referenceVoltage;
         uint8_t m_address;
+        int m_cont_channel;
 };
 
 float snsMqx_GetPercentage(float rs_ro_ratio, float *curve);
