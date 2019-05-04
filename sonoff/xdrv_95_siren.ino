@@ -81,6 +81,17 @@ const char drv_siren_gases[] PROGMEM = "co|co2|ch4|";
 
 void drv_siren_Init() {
   drv_siren_enabled = 0;
+  drv_siren_mute_time = 0;
+  drv_siren_Selected_Pattern = NULL;
+  drv_siren_Selected_Pattern_Index = 0;
+  drv_siren_Selected_Pattern_Length = 0;
+
+  memset(drv_siren_statuses, 0, sizeof(drv_siren_statuses));
+  for (int i = 0; i < gasMax; ++i) {
+    drv_siren_statuses[i] = sirenOff;
+    drv_siren_locals[i] = true;
+
+  }
 
   if (pin[GPIO_SIREN] < 99) {
     drv_siren_enabled = 1;
