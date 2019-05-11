@@ -1971,18 +1971,18 @@ const mytmplt kModules[MAXMODULE] PROGMEM = {
      GPIO_FLAG_ADC0    // ADC0   A0 Analog input
   },
   { "Sensor Siren",
-     GPIO_MQ_POWER,    // GPIO00 should be MQ-7 heat, temporarely sensors power (unused)
-     GPIO_MHZ_TXD,     // GPIO01 TX Serial RXD (MHZ-19b sensor TX)
-     GPIO_MQ7_HEAT,    // GPIO02 MQ-7 Heat on-off (should be sensors power, temporary borad wiring)
-     GPIO_MHZ_RXD,     // GPIO03 RX Serial TXD (MHZ-19b sensor RX)
+     GPIO_USER,        // GPIO00 should be MQ-7 heat, temporarely sensors power (unused)
+     GPIO_USER,        // GPIO01 TX Serial RXD (MHZ-19b sensor TX)
+     GPIO_USER,        // GPIO02 MQ-7 Heat on-off (should be sensors power, temporary borad wiring)
+     GPIO_USER,        // GPIO03 RX Serial TXD (MHZ-19b sensor RX)
      GPIO_I2C_SDA,     // I2C SDA
      GPIO_I2C_SCL,     // I2C SCL
      0,                // Flash connection or GPIO09 on ESP8285 only!
      0,                // Flash connection or GPIO10 on ESP8285 only!
      GPIO_USER,        // GPIO12 D6
-     GPIO_USER,        // GPIO13 D7
-     GPIO_SIREN_CANCEL,// GPIO14
-     GPIO_SIREN_WITH_CANCEL,       // GPIO15
+     GPIO_IRSEND,      // GPIO13 D7 IR Remote Control Send
+     GPIO_USER,        // GPIO14
+     GPIO_USER,        // GPIO15
      GPIO_USER,        // GPIO16
      GPIO_USER         // ADC0   A0 Analog input
   }

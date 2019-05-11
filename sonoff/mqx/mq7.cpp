@@ -50,7 +50,7 @@ void MQ7Sensor::setHeat(bool isHeat) {
       m_resistance_current = 0;
     }
     if (diff > 90000) {
-      setHeat(false);
+      setHeat(true);
       // Recalibrate MQ7
       calibrate();
       // Update PPM Readings

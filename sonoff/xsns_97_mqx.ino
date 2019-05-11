@@ -218,12 +218,47 @@ void snsMqx_check_alarm(void) {
   }
 }
 
+bool snsMqx_Command(void)
+{
+  bool serviced = true;
+
+  switch (XdrvMailbox.payload) {
+    case 0:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "Sensors Off");
+      //Settings.snsMqx.mqx_powered
+      break;
+    case 1:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "Sensors On");
+      break;
+    case 100:
+      MQ2Sensor::setDefaults(&Settings.snsMqx);
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "MQ2 Reset");
+      break;
+    case 101:
+      MQ7Sensor::setDefaults(&Settings.snsMqx);
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "MQ7 Reset");
+      break;
+    default:
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "100/101 will reset MQ 2/7");
+  }
+
+  return serviced;
+}
+
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
 
 bool Xsns97(uint8_t function)
 {
+  if (!i2c_flg) {
+    return false;
+  }
+
+  if (SENSOR_SIREN != Settings.module) {
+    return false;
+  }
+
   bool result = false;
 
   switch (function) {
@@ -250,6 +285,9 @@ bool Xsns97(uint8_t function)
       break;
 
     case FUNC_EVERY_250_MSECOND:
+      if (!Settings.snsMqx.mqx_powered) {
+        return result;
+      }
       if (mgx_mq7_sensor) {
         // Do not run MQ7 sensor step if MQ2 is calibrating.
         if (!mgx_mq2_sensor || !mgx_mq2_sensor->isCalibrating()) {
@@ -271,6 +309,11 @@ bool Xsns97(uint8_t function)
       break;
     case FUNC_EVERY_SECOND:
       snsMqx_check_alarm();
+      break;
+    case FUNC_COMMAND_SENSOR:
+      if (XSNS_97 == XdrvMailbox.index) {
+        result = snsMqx_Command();
+      }
       break;
 #ifdef USE_WEBSERVER
       case FUNC_WEB_APPEND:

@@ -12,7 +12,7 @@ const char HTTP_BTN_MENU_MAIN_SIREN[] PROGMEM =
   "<br/><form action='siren' method='get'><button name='alm'>Test Alarm Siren</button></form>";
 
 const char HTTP_SIREN_WEB[] PROGMEM = "%s"
-  "{s}Siren Status{m}%s:%s{e}";
+  "{s}Siren (%s){m}%s{e}";
 
 const char sns_siren_Statuses[] PROGMEM = "off|warning|alarm|mute|unmute|";
 const char sns_siren_Gases[] PROGMEM = "co|co2|ch4|";

@@ -60,6 +60,15 @@ const uint16_t drv_siren_TEST_pattern[] = {
   10, 4, 2, 4, 2, 2, 2, 2, 2, 4, 10, 20 * 10
 };
 
+const uint16_t drv_siren_UNMUTE_pattern[] = {
+  1, 1, 1, 1, 1, 0xFFFF
+};
+
+const uint16_t drv_siren_MUTE_pattern[] = {
+  1, 60, 10, 0xFFFF
+};
+
+
 const uint16_t* drv_siren_Selected_Pattern = NULL;
 int drv_siren_Selected_Pattern_Index = 0;
 int drv_siren_Selected_Pattern_Length = 0;
@@ -71,6 +80,12 @@ char drv_siren_self[32] = { 0 };
 unsigned long drv_siren_mute_time = 0;
 // Time when status update has been sent
 unsigned long drv_siren_status_time = 0;
+// buzzer status
+bool drv_siren_buzzer_is_on = false;
+// set to true if cancel button has been pressed
+bool drv_siren_cancel_pressed = false;
+// A flag if siren has cancel button enabled
+bool drv_siren_has_cancel = false;
 
 #define D_LOG_PREFIX "SRN:"
 char siren_topic[] = "siren";
@@ -98,23 +113,24 @@ void drv_siren_Init() {
     pinMode(pin[GPIO_SIREN], OUTPUT);
     digitalWrite(pin[GPIO_SIREN], 0);
   } else if (pin[GPIO_SIREN_WITH_CANCEL] < 99) {
-    // GPIO_SIREN_WITH_CANCEL can be only on IO15 port to use INPUT_PULLDOWN_16
+    // GPIO_SIREN_WITH_CANCEL
     // In this mode driver will output siren pulse then go to input mode INPUT_PULLDOWN_16 and check if
     // it's UP to cancel siren
     drv_siren_enabled = 1;
-    pinMode(pin[GPIO_SIREN_WITH_CANCEL], OUTPUT);
-    digitalWrite(pin[GPIO_SIREN_WITH_CANCEL], 0);
+    drv_siren_has_cancel = true;
+    pinMode(pin[GPIO_SIREN_WITH_CANCEL], INPUT);
   }
 
   // Set cancel button input pin
   if (drv_siren_enabled && pin[GPIO_SIREN_CANCEL] < 99) {
-    pinMode(pin[GPIO_SIREN_CANCEL], INPUT_PULLUP);
+    drv_siren_has_cancel = true;
+    pinMode(pin[GPIO_SIREN_CANCEL], INPUT);
   }
 
   if (drv_siren_enabled) {
-    AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "Siren enabled"));
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " Siren enabled with %s cancel"), drv_siren_has_cancel ? "the" : "NO" );
   } else {
-    AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX "Siren disabled"));
+    AddLog_P(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " Siren disabled"));
   }
 
   String mac = WiFi.macAddress();
@@ -293,6 +309,10 @@ void Siren_UpdatePattern() {
       break;
   }
 
+  Siren_Kickoff();
+}
+
+void Siren_Kickoff() {
   // Turn siren on and set first timer
   if (drv_siren_Selected_Pattern != NULL) {
     drv_siren_OnOff(true);
@@ -301,19 +321,28 @@ void Siren_UpdatePattern() {
 }
 
 void drv_siren_OnOff(bool isOn) {
+  drv_siren_buzzer_is_on = isOn;
   if (pin[GPIO_SIREN] < 99) {
     digitalWrite(pin[GPIO_SIREN], isOn ? 1 : 0);
   } else if (pin[GPIO_SIREN_WITH_CANCEL] < 99) {
-    pinMode(pin[GPIO_SIREN_WITH_CANCEL], OUTPUT);
-    digitalWrite(pin[GPIO_SIREN_WITH_CANCEL], isOn ? 1 : 0);
+    if (isOn) {
+      pinMode(pin[GPIO_SIREN_WITH_CANCEL], OUTPUT);
+      digitalWrite(pin[GPIO_SIREN_WITH_CANCEL], isOn ? 1 : 0);
+    } else {
+      pinMode(pin[GPIO_SIREN_WITH_CANCEL], INPUT);
+    }
   }
 }
 
 void drv_siren_Loop() {
-  if (drv_siren_Selected_Pattern == NULL) {
-    return;
-  }
   if (TimeReached(drv_siren_50msecond)) {
+    // Stop siren loop if reached break pattern
+    if (drv_siren_Selected_Pattern[drv_siren_Selected_Pattern_Index] == 0xFFFF) {
+      drv_siren_Selected_Pattern_Index = 0;
+      drv_siren_Selected_Pattern = NULL;
+      drv_siren_OnOff(false);
+      return;
+    }
     // Expired odd index always turn siren off
     drv_siren_OnOff((drv_siren_Selected_Pattern_Index % 2) == 0);
     // Extend timer
@@ -391,6 +420,60 @@ bool drv_siren_MqttData(void)
   return true;
 }
 
+void drv_siren_cancelPressed(bool isLongPress) {
+  AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_PREFIX " %s press detected"), isLongPress ? "Long" : "Short");
+  if (isLongPress) {
+    Siren_UnmuteReset(true);
+    drv_siren_Selected_Pattern = drv_siren_UNMUTE_pattern;
+  } else {
+    Siren_Mute();
+    drv_siren_Selected_Pattern = drv_siren_MUTE_pattern;
+  }
+  drv_siren_Selected_Pattern_Index = 0;
+  Siren_Kickoff();
+}
+
+bool drv_siren_cancel_pressed_prev = false;
+bool drv_siren_cancel_long_press = false;
+unsigned long drv_siren_cancel_pressed_at = 0;
+
+void drv_siren_processCancel() {
+  // If classic cancel pin is set, get it's value
+  if (pin[GPIO_SIREN_CANCEL] < 99) {
+    // Old shematic use pull down as pressed
+    drv_siren_cancel_pressed = digitalRead(pin[GPIO_SIREN_CANCEL]) == 0;
+  } else if (!drv_siren_buzzer_is_on) {
+    // Read from GPIO_SIREN_WITH_CANCEL if buzzer is off or keep old state if on
+    // New schematic use pull up on IO15 (pull down by default)
+    drv_siren_cancel_pressed = digitalRead(pin[GPIO_SIREN_WITH_CANCEL]) != 0;
+  }
+
+  // Register press transition
+  if (drv_siren_cancel_pressed && !drv_siren_cancel_pressed_prev) {
+    drv_siren_cancel_long_press = false;
+    drv_siren_cancel_pressed_at =  millis();
+  }
+
+  if (drv_siren_cancel_pressed == drv_siren_cancel_pressed_prev) {
+    if (drv_siren_cancel_pressed && !drv_siren_cancel_long_press) {
+      // Check for long press
+      if ((millis() - drv_siren_cancel_pressed_at) >= 2000) {
+        drv_siren_cancel_long_press = true;
+        drv_siren_cancelPressed(true);
+      }
+    }
+  } else {
+    // If unpressed, check for the short press
+    if (!drv_siren_cancel_pressed) {
+      unsigned long diff = millis() - drv_siren_cancel_pressed_at;
+      if (diff < 2000 && diff > 250) {
+        drv_siren_cancelPressed(false);
+      }
+    }
+  }
+
+  drv_siren_cancel_pressed_prev = drv_siren_cancel_pressed;
+}
 
 /*********************************************************************************************\
  * Interface
@@ -408,13 +491,20 @@ bool Xdrv95(uint8_t function)
       drv_siren_Init();
     break;
     case FUNC_LOOP:
-      drv_siren_Loop();
+      if (drv_siren_Selected_Pattern != NULL) {
+        drv_siren_Loop();
+      }
     break;
     case FUNC_MQTT_SUBSCRIBE:
       drv_siren_MqttSubscribe();
       break;
     case FUNC_MQTT_DATA:
       result = drv_siren_MqttData();
+      break;
+    case FUNC_EVERY_100_MSECOND:
+      if (drv_siren_has_cancel) {
+        drv_siren_processCancel();
+      }
       break;
     case FUNC_EVERY_SECOND:
       // Unmute siren after 8 hours, if mute is set
