@@ -95,7 +95,12 @@ void MQ2Sensor::updatePPM() {
     calibrate();
     AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: Calibrate due to max & time"));
   }
-  m_ppm_smoothed = 0.95 * m_ppm_smoothed + 0.05 * m_ppm;
+  m_ppm_smoothed = 0.99 * m_ppm_smoothed + 0.01 * m_ppm;
+
+  // Allow m_ppm_smoothed to go down pretty quick
+  if (m_ppm_smoothed > m_ppm) {
+    m_ppm_smoothed = m_ppm;
+  }
 }
 
 // Set default settings

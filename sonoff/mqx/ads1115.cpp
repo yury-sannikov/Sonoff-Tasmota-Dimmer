@@ -95,6 +95,19 @@ float ADS1115Reader::calculateResistance(int channel)
 }
 
 
+float snsMqx_clampPPM(float ppm) {
+  if (isnan(ppm)) {
+    return 0;
+  }
+  // Clamp PPM value between 0 and 20000 ppm
+  if (ppm < 0.0) {
+    return 0.0;
+  } else if (ppm > 20000.0) {
+    return 20000.0;
+  }
+  return ppm;
+}
+
 float snsMqx_GetPercentage(float rs_ro_ratio, float *curve)
 {
   if (rs_ro_ratio < 0.01) {
@@ -104,5 +117,5 @@ float snsMqx_GetPercentage(float rs_ro_ratio, float *curve)
   // gas concentration(x2) using x2 = [((y2-y1)/slope)+x1]
   // as in curves are on logarithmic coordinate, power of 10 is taken to convert result to non-logarithmic.
   float exp_val = (((log(rs_ro_ratio) / 2.302585) - curve[1]) / curve[2]) + curve[0];
-  return pow(10, exp_val);
+  return snsMqx_clampPPM(pow(10, exp_val));
 }

@@ -14,8 +14,14 @@ MQ2Sensor *mgx_mq2_sensor = NULL;
 // ADS1115 reader
 ADS1115Reader *mgx_ads = NULL;
 
+// Set to true if board support power control
 bool mqx_has_power_ctl = false;
+// Store time when power was on.
+// give some time for a preheat sensors before checking alarms
+unsigned long mqx_has_preheat_time = 0;
 
+// Preheat time after power on
+#define MQX_PREHEAT_SECONDS 60*20
 
 void snsMqx_Init(void) {
   mgx_mq2_sensor = new MQ2Sensor(&Settings.snsMqx, *mgx_ads);
@@ -41,6 +47,11 @@ void snsMqx_Show(void) {
   if (!mgx_ads->initialized()) {
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s{s}Detecting 1115...{m}{e}"), mqtt_data);
     return;
+  }
+
+  if (mqx_has_preheat_time > 0) {
+    int remaining = MQX_PREHEAT_SECONDS - ((millis() - mqx_has_preheat_time) / 1000);
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s{s}MQX Preheating{m}%d seconds remaining{e}"), mqtt_data, remaining);
   }
 
   if (mgx_mq2_sensor) {
@@ -141,6 +152,7 @@ void snsMqx_Telemetry(void) {
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"MQX\":{"), mqtt_data);
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s\"has_pwctl\": %s"), mqtt_data, mqx_has_power_ctl ? "true" : "false");
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"pwr\":\"%d\""), mqtt_data, Settings.snsMqx.mqx_powered);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"preheat\":\"%lu\""), mqtt_data, mqx_has_preheat_time);
   if (!mgx_ads->initialized()) {
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"error\":\"no ads1115\""), mqtt_data);
   } else {
@@ -173,11 +185,23 @@ void snsMqx_Telemetry(void) {
       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"rot\":\"%d.%d.%d %d:%d\""), mqtt_data, 1970 + tm.year, tm.month, tm.day_of_month, tm.hour, tm.minute);
       snsMqx_Telemetry_addFloat("warnl",  Settings.snsMqx.mq7_warning_level_ppm, false);
       snsMqx_Telemetry_addFloat("alrml",  Settings.snsMqx.mq7_alarm_level_ppm, false);
-      snsMqx_Telemetry_addFloat("alrmd",  Settings.snsMqx.mq7_alarm_off_delta, false);
       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
     }
   }
   snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s}"), mqtt_data);
+}
+
+bool snsMqx_is_preheat() {
+  if (mqx_has_preheat_time == 0) {
+    return true;
+  }
+  // Give 20 minutes to the preheat
+  if (millis() - mqx_has_preheat_time > (1000 * MQX_PREHEAT_SECONDS)) {
+    mqx_has_preheat_time = 0;
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: Preheat completed"));
+    return true;
+  }
+  return false;
 }
 
 void snsMqx_check_alarm_for(float value, int gasType, float alarmLevel, float warningLevel) {
@@ -199,6 +223,10 @@ void snsMqx_check_alarm_for(float value, int gasType, float alarmLevel, float wa
 }
 
 void snsMqx_check_alarm(void) {
+  if (snsMqx_is_preheat()) {
+    return;
+  }
+
   if (mgx_mq2_sensor) {
     if (!isinf(mgx_mq2_sensor->ppmReadingSmoothed())) {
       snsMqx_check_alarm_for(mgx_mq2_sensor->ppmReadingSmoothed(),
@@ -218,17 +246,94 @@ void snsMqx_check_alarm(void) {
   }
 }
 
+boolean snsMqx_set_sensor_power(bool isOn) {
+  if (!mqx_has_power_ctl) {
+    return false;
+  }
+  Settings.snsMqx.mqx_powered = isOn ? 1 : 0;
+  digitalWrite(pin[GPIO_MQ_POWER], Settings.snsMqx.mqx_powered);
+  if (!isOn) {
+    // If power is off, disable all gas warnings
+     Siren_SetStatusGas(sirenOff, gasFlammable, true);
+     Siren_SetStatusGas(sirenOff, gasCO, true);
+     Siren_SetStatusGas(sirenOff, gasCO2, true);
+  } else {
+    // Start preheat not to raise siren
+    mqx_has_preheat_time = millis();
+  }
+  snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, isOn ? "Sensors On" : "Sensors Off");
+  return true;
+}
+
+void snsMqx_settings_get_set_float(float* value, const char* text) {
+
+  char* argument = NULL;
+  bool arg_seek = false;
+  for (int i = 0; i < XdrvMailbox.data_len; ++i) {
+    if (XdrvMailbox.data[i] == 0x20) {
+      arg_seek = true;
+    } else if (arg_seek) {
+      argument = XdrvMailbox.data + i;
+      break;
+    }
+  }
+
+  if (argument != NULL) {
+    float data = CharToDouble(argument);
+    if (!isnan(data)) {
+      *value = data;
+    }
+  }
+  char str_val[32];
+  dtostrf(*value, 0, 2, str_val);
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"desc\":\"%s\",\"" D_CMND_SENSOR "%d\":\"%s\"}"), text, XSNS_97, str_val);
+}
+
 bool snsMqx_Command(void)
 {
   bool serviced = true;
 
   switch (XdrvMailbox.payload) {
-    case 0:
-      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "Sensors Off");
-      //Settings.snsMqx.mqx_powered
-      break;
     case 1:
-      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "Sensors On");
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq2_clean_air_factor, "MQ2 Clean Air Factor");
+      break;
+    case 2:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq2_kohm_max, "MQ2 Rs(max) kOhm");
+      break;
+    case 3:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq2_Ro_value, "MQ2 Ro/Rs");
+      break;
+    case 4:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq2_warning_level_ppm, "MQ2 Warning Level PPM");
+      break;
+    case 5:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq2_alarm_level_ppm, "MQ2 Alarm Level PPM");
+      break;
+    case 11:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_clean_air_factor, "MQ7 Clean Air Factor");
+      break;
+    case 12:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_kohm_max, "MQ7 Rs(max) kOhm");
+      break;
+    case 13:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_Ro_value, "MQ7 Ro/Rs");
+      break;
+    case 14:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_warning_level_ppm, "MQ7 Warning Level PPM");
+      break;
+    case 15:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_alarm_level_ppm, "MQ7 Alarm Level PPM");
+      break;
+
+    case 90:
+      if (!snsMqx_set_sensor_power(true)) {
+        snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "No power control");
+      }
+      break;
+    case 91:
+      if (!snsMqx_set_sensor_power(false)) {
+        snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "No power control");
+      }
       break;
     case 100:
       MQ2Sensor::setDefaults(&Settings.snsMqx);
@@ -239,7 +344,7 @@ bool snsMqx_Command(void)
       snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "MQ7 Reset");
       break;
     default:
-      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "100/101 will reset MQ 2/7");
+      snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_SENSOR_INDEX_SVALUE, XSNS_97, "100/101 will reset MQ 2/7, 90/91 on/off sensors pwr. ");
   }
 
   return serviced;
@@ -267,6 +372,7 @@ bool Xsns97(uint8_t function)
       mgx_mq2_sensor = NULL;
       mgx_ads = new ADS1115Reader();
       mqx_has_power_ctl = false;
+      mqx_has_preheat_time = millis() + 1; // Make sure mills non-zero
     break;
     case FUNC_PREP_BEFORE_TELEPERIOD:
       if (!mgx_ads->initialized()) {
@@ -305,10 +411,14 @@ bool Xsns97(uint8_t function)
       }
       break;
     case FUNC_JSON_APPEND:
-      snsMqx_Telemetry();
+      if (Settings.snsMqx.mqx_powered) {
+        snsMqx_Telemetry();
+      }
       break;
     case FUNC_EVERY_SECOND:
-      snsMqx_check_alarm();
+      if (Settings.snsMqx.mqx_powered) {
+        snsMqx_check_alarm();
+      }
       break;
     case FUNC_COMMAND_SENSOR:
       if (XSNS_97 == XdrvMailbox.index) {
