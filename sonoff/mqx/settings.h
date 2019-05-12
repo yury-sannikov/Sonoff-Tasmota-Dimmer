@@ -31,7 +31,9 @@ typedef struct {
   // MQ7 Alarm
   float    mq7_warning_level_ppm;
   float    mq7_alarm_level_ppm;
-  float    mq7_alarm_off_delta;
+
+  // Preheat time in seconds after power on
+  float mqx_power_on_preheat_time;
 
 } SNSMQx_Settings;
 

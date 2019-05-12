@@ -50,7 +50,7 @@ void snsMqx_Show(void) {
   }
 
   if (mqx_has_preheat_time > 0) {
-    int remaining = MQX_PREHEAT_SECONDS - ((millis() - mqx_has_preheat_time) / 1000);
+    int remaining = Settings.snsMqx.mqx_power_on_preheat_time - ((millis() - mqx_has_preheat_time) / 1000);
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s{s}MQX Preheating{m}%d seconds remaining{e}"), mqtt_data, remaining);
   }
 
@@ -130,7 +130,7 @@ void snsMqx_CheckSettings (void) {
   memset(&Settings.snsMqx, 0, sizeof(Settings.snsMqx));
   Settings.snsMqx.hdr_magic = MQX_SETTINGS_MAGIC;
   Settings.snsMqx.mqx_powered = 1;
-
+  Settings.snsMqx.mqx_power_on_preheat_time = MQX_PREHEAT_SECONDS;
 
   MQ2Sensor::setDefaults(&Settings.snsMqx);
   MQ7Sensor::setDefaults(&Settings.snsMqx);
@@ -193,15 +193,15 @@ void snsMqx_Telemetry(void) {
 
 bool snsMqx_is_preheat() {
   if (mqx_has_preheat_time == 0) {
-    return true;
+    return false;
   }
   // Give 20 minutes to the preheat
-  if (millis() - mqx_has_preheat_time > (1000 * MQX_PREHEAT_SECONDS)) {
+  if (millis() - mqx_has_preheat_time > (1000 * Settings.snsMqx.mqx_power_on_preheat_time)) {
     mqx_has_preheat_time = 0;
     AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MQX: Preheat completed"));
-    return true;
+    return false;
   }
-  return false;
+  return true;
 }
 
 void snsMqx_check_alarm_for(float value, int gasType, float alarmLevel, float warningLevel) {
@@ -323,6 +323,10 @@ bool snsMqx_Command(void)
       break;
     case 15:
       snsMqx_settings_get_set_float(&Settings.snsMqx.mq7_alarm_level_ppm, "MQ7 Alarm Level PPM");
+      break;
+
+    case 20:
+      snsMqx_settings_get_set_float(&Settings.snsMqx.mqx_power_on_preheat_time, "Preheat time seconds");
       break;
 
     case 90:

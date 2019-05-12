@@ -120,9 +120,6 @@ void MQ7Sensor::setDefaults(SNSMQx_Settings* settings) {
   // MQ7 Alarm
   settings->mq7_warning_level_ppm = 15.0;
   settings->mq7_alarm_level_ppm = 50.0;
-  // Since MQ7 goes low pretty slow, a decreasing delta considered as
-  // removed alarm state. If it stops going down, alarm should be raised again
-  settings->mq7_alarm_off_delta = 0.1;
 }
 
 void MQ7Sensor::updatePPM() {
