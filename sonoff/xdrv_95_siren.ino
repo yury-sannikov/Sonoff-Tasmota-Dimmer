@@ -61,11 +61,11 @@ const uint16_t drv_siren_TEST_pattern[] = {
 };
 
 const uint16_t drv_siren_UNMUTE_pattern[] = {
-  1, 1, 1, 1, 1, 0xFFFF
+  1, 100, 1, 1, 1, 1, 1, 0xFFFF
 };
 
 const uint16_t drv_siren_MUTE_pattern[] = {
-  1, 60, 10, 0xFFFF
+  1, 100, 2, 5, 2, 0xFFFF
 };
 
 
@@ -340,6 +340,7 @@ void drv_siren_Loop() {
     if (drv_siren_Selected_Pattern[drv_siren_Selected_Pattern_Index] == 0xFFFF) {
       drv_siren_Selected_Pattern_Index = 0;
       drv_siren_Selected_Pattern = NULL;
+      drv_siren_Selected_Pattern_Length = 0;
       drv_siren_OnOff(false);
       return;
     }
@@ -425,9 +426,11 @@ void drv_siren_cancelPressed(bool isLongPress) {
   if (isLongPress) {
     Siren_UnmuteReset(true);
     drv_siren_Selected_Pattern = drv_siren_UNMUTE_pattern;
+    drv_siren_Selected_Pattern_Length = sizeof(drv_siren_UNMUTE_pattern) / sizeof(uint16_t);
   } else {
     Siren_Mute();
     drv_siren_Selected_Pattern = drv_siren_MUTE_pattern;
+    drv_siren_Selected_Pattern_Length = sizeof(drv_siren_MUTE_pattern) / sizeof(uint16_t);
   }
   drv_siren_Selected_Pattern_Index = 0;
   Siren_Kickoff();
