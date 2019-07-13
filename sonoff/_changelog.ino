@@ -1,4 +1,158 @@
-/* 6.3.0 20181030
+/* 6.5.0 20190319
+ * Remove commands SetOption14 and SetOption63 as it has been superseded by command Interlock
+ * Remove command SetOption35 0-255 for mDNS start-up delay (#4793)
+ * Remove support for MQTT_LIBRARY_TYPE, MQTT_ARDUINOMQTT and MQTT_TASMOTAMQTT (#5474)
+ * Change webserver content handling from single String to small Chunks increasing RAM
+ * Change code use of boolean to bool and byte to uint8_t
+ * Change code uint8_t flags to bool flags
+ * Change sonoff_template.h layout regarding optional module flags like ADC0
+ * Change sonoff_template.h module lay-out by removing non-configurable GPIOs
+ * Change button driver making it modular
+ * Change switch driver making it modular and introduce input filter (#4665, #4724)
+ * Change switch input detection by optimizing switch debounce (#4724)
+ * Change web authentication (#4865)
+ * Change image name BE_MINIMAL to FIRMWARE_MINIMAL and USE_xyz to FIRMWARE_xyz (#5106)
+ * Change GUI weblog from XML to plain text solving possible empty screens (#5154)
+ * Fix most compiler warnings
+ * Fix Display exception 28 when JSON value is NULL received
+ * Fix epaper driver (#4785)
+ * Fix HAss Sensor Discovery Software Watchdog restart (#4831, #4988)
+ * Fix allowable MAX_RULE_VARS to 16 (#4933)
+ * Fix mDNS addService (#4938, #4951)
+ * Fix HAss discovery of MHZ19(B) sensors (#4992)
+ * Fix some exceptions and watchdogs due to lack of stack space (#5215)
+ * Fix GUI wifi password acception starting with asteriks (*) (#5231, #5242)
+ * Fix command WebSend intermittent results (#5273, #5304)
+ * Fix additional characters in fallbacktopic, hostname and mqttclient on core 2.5.0 (#5359, #5417)
+ * Fix Energy TotalStartTime when commands EnergyReset0 and/or EnergyReset3 used (#5373)
+ * Fix DS18S20 temperature calculation (#5375)
+ * Fix float calculations in range from 0 to -1 (#5386)
+ * Fix exception on GUI Configure Logging and Configure Other (#5424)
+ * Add commands PowerCal, VoltageCal and CurrentCal for HLW8012, HJL01 and BL0937 based energy sensors
+ * Add command SerialDelimiter 128 to filter reception of only characters between ASCII 32 and 127 (#5131)
+ * Add command SSerialSend5 \<hexdata\> to SerialBridge
+ * Add command Interlock 0 / 1 / 1,2 3,4 .. to control interlock ON/OFF and add up to 8 relays in 1 to 4 interlock groups (#4910, #5014)
+ * Add command Template 255 to copy module configuration over to current active template and store as user template named Merged (#5371)
+ * Add command WifiConfig 7 to allow reset of device in AP mode without admin password (#5297)
+ * Add command SetOption36 to control boot loop default restoration (#4645, #5063)
+ * Add command SetOption37 for RGBCW color mapping (#5326)
+ * Add command SetOption55 0/1 and define MDNS_ENABLE to disable/enable mDNS (#4793, #4923)
+ * Add command SetOption62 0/1 to disable retain on Button or Switch hold messages (#5299)
+ * Add support for Smanergy KA10 Smart Wall Socket with Energy monitoring
+ * Add support for commands in sensor drivers
+ * Add support for MAX31855 K-Type thermocouple sensor using softSPI (#4764)
+ * Add support for Near Field Communication (NFC) controller PN532 using Serial (#4791, #5162)
+ * Add support for OBI Power Socket 2 (#4829)
+ * Add support for YTF IR Bridge (#4855)
+ * Add support for Mi LED Desk Lamp with rotary switch (#4887)
+ * Add support for Digoo DG-SP202 Smart Socket with Energy monitoring (#4891)
+ * Add support for MAX44009 Ambient Light sensor (#4907)
+ * Add support for inverted buttons and inverted buttons without pullup (#4914)
+ * Add support for Luminea ZX2820 Smart Socket with Energy monitoring (#4921)
+ * Add support for multiple ADS1115 I2C devices (#5083)
+ * Add support for online template change using command Template or GUI Configure Other (#5177)
+ * Add support for Korean language translations (#5344)
+ * Add support for sensor SCD30 (#5434)
+ * Add parameter CFG_HOLDER to status 1 message (#5206)
+ * Add SetOption32 until SetOption49 diagnostic information to Status 3 report as replacement for second property value in SetOption property name
+ * Add Resolution property to Status 3 report providing previous SetOption second value property
+ * Add property MqttCount to status 6 message representing number of Mqtt re-connections
+ * Add property LinkCount to state and status 11 message representing number of Wifi Link re-connections
+ * Add property Downtime to state and status 11 message representing the duration of wifi connection loss
+ * Add variable %timestamp% to rules (#4749)
+ * Add rule support for "==", "!=" ">=" and "<=" (#5122)
+ * Add rule expression enabled by define USE_EXPRESSION in my_user_config.h (#5210)
+ * Add Power status functionality to LED2 when configured leaving LED1 for Link status indication
+ * Add user configuration of HLW8012 and HJL-01/BL0937 Energy Monitoring as used in Sonoff Pow and many Tuya based devices
+ * Add user configuration of MCP39F501 Energy Monitoring as used in Shelly2
+ * Add online template configuration using both commands and Configure Template menu option in GUI
+ * Add (S)SerialSend3 escape sequence \x to allow hexadecimal byte value (#3560, #4947)
+ * Add define DS18B20_INTERNAL_PULLUP to select internal input pullup when only one DS18B20 sensor is connected eliminating external resistor (#4738)
+ * Add button control when no relay configured (#4682)
+ * Add startup delay of 4 seconds to button control (#4829)
+ * Add core version conditional compile options to provided PWM files (#4917)
+ * Add resiliency to saved Settings (#5065)
+ * Add MHZ19 Temperature as Domoticz Temperature selection (#5128)
+ * Add HAss status sensor (#5139)
+ * Add status message to former declined group commands (#5145)
+ * Add 0x to IRRemote (SetOption29) and RCSwitch (SetOption28) received hexadecimal data (#5431)
+ *
+ * 6.4.1 20181224
+ * Change RAM usage BMP/BME I2C sensors
+ * Change FallbackTopic from cmnd/<mqttclient>/ to cmnd/<mqttclient>_fb/ to discriminate from Topic (#1528)
+ * Change FallbackTopic detection (#4706)
+ * Change Hass discovery to short MQTT messages as used by Hass 0.81 and up (#4711)
+ * Change MQTT GUI password handling (#4723)
+ * Fix possible dtostrf buffer overflows by increasing buffers
+ * Fix wifi strongest signal detection (#4704)
+ * Fix Alexa "this value is outside the range of the device". Needs power cycle and Alexa deletion/discovery cycle. (#3159, #4712)
+ * Add Slovak language file (#4663)
+ * Add support for AZ-Instrument 7798 CO2 meter/datalogger (#4672)
+ * Add define WIFI_SOFT_AP_CHANNEL in my_user_config.h to set Soft Access Point Channel number between 1 and 13 as used by Wifi Manager web GUI (#4673)
+ * Add define USE_MQTT_TLS_CA_CERT for checking MQTT TLS against root ca using Let's Encrypt cert from sonoff_letsencrypt.h - not supported with core 2.3.0 (#4703)
+ *
+ * 6.4.0 20181217
+ * Change GUI Configure Module by using AJAX for data fetch to cut page size (and memory use) by 40%
+     In case of web page errors clear your browser cache or do Page Reload (F5 or Ctrl+R)
+ * Change enforcing flashmode dout but it is still mandatory
+ * Change bootcount update (being first) flash write to 10 seconds after restart
+ * Change display and epaper drivers
+ * Change command WebSend Host header field from IP address to hostname (#4331)
+ * Change log buffer size from 512 to 520 to accommodate http sensor data (#4354)
+ * Change default WIFI_CONFIG_TOOL from WIFI_WAIT to WIFI_RETRY in my_user_config.h (#4400)
+ * Change webgui refresh time delay for Save Settings and local OTA Upload (#4423)
+ * Change SR-04 driver to use NewPing library (#4488)
+ * Change MCP230xx driver to support interrupt retention over teleperiod (#4547)
+ * Change support for MPU6050 using DMP (#4581)
+ * Fix unintended function overload of WifiState
+ * Fix wifi connection errors using wifi disconnect and ESP.reset instead of ESP.restart
+ * Fix Sonoff Pow R2 and Sonoff S31 Serial interface hang caused by Sonoff Basic R2 driver delay implementation (and possibly core bug)
+ * Fix MQTT connection error after restart
+ * Fix wifi re-scan connection baseline
+ * Fix possible strncat buffer overflows
+ * Fix intermittent Pzem sensor energy overflow calculation error
+ * Fix shelly2 ghost switching caused by lack of pull-up inputs (#4255)
+ * Fix hardware serial pin configuration. To keep using hardware serial swap current Rx/Tx pin configuration only (#4280)
+ * Fix MqttRetry values above 255 seconds (#4424)
+ * Fix WifiManager functionality on initial installation (#4433)
+ * Fix ArduinoOTA for Core 2.5.0 (#4620)
+ * Add minutes to commands Timezone to allow all possible world timezones
+ * Add more strict checks for GPIO selections
+ * Add code image and optional commit number to version
+ * Add dynamic delay to main loop providing time for wifi background tasks
+ * Add additional start-up delay during initial wifi connection
+ * Add support for decoding Theo V2 sensors as documented on https://sidweb.nl using 434MHz RF sensor receiver
+ * Add support for decoding Alecto V2 sensors like ACH2010, WS3000 and DKW2012 weather stations using 868MHz RF sensor receiver
+ * Add user definition of defines WIFI_RSSI_THRESHOLD (default 10) and WIFI_RESCAN_MINUTES (default 44)
+ * Add command SetOption58 0/1 to enable IR raw data info in JSON message (#2116)
+ * Add command IRSend <frequency>|0,<rawdata1>,<rawdata2>,.. to allow raw data transmission (#2116)
+ * Add command SetOption56 0/1 to enable wifi network scan and select highest RSSI (#3173)
+ * Add command SetOption57 0/1 to enable wifi network re-scan every 44 minutes with a rssi threshold of 10 to select highest RSSI (#3173)
+ * Add support for SDM220 (#3610)
+ * Add default sleep 1 to sonoff-basic to lower energy consumption (#4217)
+ * Add wifi status to Tuya (#4221)
+ * Add delays to reduce CPU usage at boot time (#4233)
+ * Add command SetOption24 0/1 to select pressure unit as hPa or mmHg (#4241)
+ * Add optional hardware serial when GPIO13(Rx) and GPIO15(Tx) are selected removing hardware serial from GPIO01(Tx) and GPIO03(Rx) (#4288)
+ * Add support for Gosund SP1 v2.3 Power Socket with Energy Monitoring (#4297)
+ * Add support for Armtronix dimmers. See wiki for info (#4321)
+ * Add to command WebSend option to send a direct path when command starts with a slash (#4329)
+ * Add support for LG HVac and IrRemote (#4377)
+ * Add initial support for Hass sensor discovery (#4380)
+ * Add support for Fujitsu HVac and IrRemote (#4387)
+ * Add support for I2C MGC3130 Electric Field Effect sensor by Christian Baars (#3774, #4404)
+ * Add command CalcRes to set number of decimals (0 - 7) used in commands ADD, SUB, MULT and SCALE (#4420)
+ * Add CPU average load to state message (#4431)
+ * Add command SetOption59 0/1 to change state topic from tele/STATE to stat/RESULT (#4450)
+ * Add support for SM Smart Wifi Dimmer PS-16-DZ (#4465)
+ * Add support for Teckin US Power Socket with Energy Monitoring (#4481)
+ * Add command SetOption60 0/1 to select dynamic sleep (0) or sleep (1) (#4497)
+ * Add support for iFan02 Fanspeed in Domoticz using a selector (#4517)
+ * Add support for GPIO02 for newer Sonoff Basic (#4518)
+ * Add Announce Switches to MQTT Discovery (#4531)
+ * Add support for Manzoku Power Strip (#4590)
+ *
+ * 6.3.0 20181030
  * Change web Configure Module GPIO drop down list order for better readability
  * Change status JSON message providing more switch and retain information
  * Change xsns_17_senseair.ino to use TasmotaModbus library

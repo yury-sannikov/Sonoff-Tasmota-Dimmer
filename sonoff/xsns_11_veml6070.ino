@@ -1,7 +1,7 @@
 /*
   xsns_11_veml6070.ino - VEML6070 ultra violet light sensor support for Sonoff-Tasmota
 
-  Copyright (C) 2018  Theo Arends
+  Copyright (C) 2019  Theo Arends
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@
   Version Date      Action    Description
   --------------------------------------------------------------------------------------------
 
-  1.0.0.3 20181006  fixed     - missing "" around the UV Index text 
+  1.0.0.3 20181006  fixed     - missing "" around the UV Index text
                               - thanks to Lisa she had tested it on here mqtt system.
   --
   1.0.0.2 20180928  tests     - same as in version 1.0.0.1
@@ -94,6 +94,8 @@
  * I2C Address: 0x38 and 0x39
 \*********************************************************************************************/
 
+#define XSNS_11                     11
+
 #define VEML6070_ADDR_H             0x39            // on some PCB boards the address can be changed by a solder point,
 #define VEML6070_ADDR_L             0x38            // to have no address conflicts with other I2C sensors and/or hardware
 #define VEML6070_INTEGRATION_TIME   3               // IT_4 = 500msec integration time, because the precission is 4 times higher then IT_0.5
@@ -138,8 +140,7 @@ void Veml6070Detect(void)
     veml6070_type      = 1;
     uint8_t veml_model = 0;
     GetTextIndexed(veml6070_name, sizeof(veml6070_name), veml_model, kVemlTypes);
-    snprintf_P(log_data, sizeof(log_data), S_LOG_I2C_FOUND_AT, "VEML6070", VEML6070_ADDR_L);
-    AddLog(LOG_LEVEL_DEBUG);
+    AddLog_P2(LOG_LEVEL_DEBUG, S_LOG_I2C_FOUND_AT, "VEML6070", VEML6070_ADDR_L);
   }
 }
 
@@ -154,13 +155,11 @@ void Veml6070UvTableInit(void)
       uv_risk_map[i] = ( (USE_VEML6070_RSET / VEML6070_TABLE_COEFFCIENT) / VEML6070_UV_MAX_DEFAULT ) * (i+1);
     } else {
       uv_risk_map[i] = ( (VEML6070_RSET_DEFAULT / VEML6070_TABLE_COEFFCIENT) / VEML6070_UV_MAX_DEFAULT ) * (i+1);
-      snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_DEBUG "VEML6070 resistor error %d"), USE_VEML6070_RSET);
-      AddLog(LOG_LEVEL_DEBUG);
+      AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_DEBUG "VEML6070 resistor error %d"), USE_VEML6070_RSET);
     }
 #else
     uv_risk_map[i] = ( (VEML6070_RSET_DEFAULT / VEML6070_TABLE_COEFFCIENT) / VEML6070_UV_MAX_DEFAULT ) * (i+1);
-    snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_DEBUG "VEML6070 resistor default used %d"), VEML6070_RSET_DEFAULT);
-    AddLog(LOG_LEVEL_DEBUG);
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_DEBUG "VEML6070 resistor default used %d"), VEML6070_RSET_DEFAULT);
 #endif
   }
 }
@@ -185,7 +184,7 @@ void Veml6070EverySecond(void)
 
 /********************************************************************************************/
 
-void Veml6070ModeCmd(boolean mode_cmd)
+void Veml6070ModeCmd(bool mode_cmd)
 {
   // mode_cmd 1 = on  = 1[ms]
   // mode_cmd 0 = off = 2[ms]
@@ -194,8 +193,7 @@ void Veml6070ModeCmd(boolean mode_cmd)
   uint8_t status   = Wire.endTransmission();
   // action on status
   if (!status) {
-    snprintf_P(log_data, sizeof(log_data), S_LOG_I2C_FOUND_AT, "VEML6070 mode_cmd", VEML6070_ADDR_L);
-    AddLog(LOG_LEVEL_DEBUG);
+    AddLog_P2(LOG_LEVEL_DEBUG, S_LOG_I2C_FOUND_AT, "VEML6070 mode_cmd", VEML6070_ADDR_L);
   }
 }
 
@@ -239,8 +237,7 @@ double Veml6070UvRiskLevel(uint16_t uv_level)
     // out of range and much to high - it must be outerspace or sensor damaged
     snprintf_P(str_uvrisk_text, sizeof(str_uvrisk_text), D_UV_INDEX_7);
     return ( risk = 99 );
-    snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_DEBUG "VEML6070 out of range %d"), risk);
-    AddLog(LOG_LEVEL_DEBUG);
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR(D_LOG_DEBUG "VEML6070 out of range %d"), risk);
   }
 }
 
@@ -268,15 +265,15 @@ double Veml6070UvPower(double uvrisk)
 
 /********************************************************************************************/
 
-void Veml6070Show(boolean json)
+void Veml6070Show(bool json)
 {
   if (veml6070_type) {
-    char str_uvlevel[6];      // e.g. 99999 inc  = UVLevel
-    char str_uvrisk[6];       // e.g. 25.99 text = UvIndex
-    char str_uvpower[6];      // e.g. 0.399 W/m² = UvPower
     // convert double values to string
+    char str_uvlevel[33];      // e.g. 99999 inc  = UVLevel
     dtostrfd((double)uvlevel, 0, str_uvlevel);
+    char str_uvrisk[33];       // e.g. 25.99 text = UvIndex
     dtostrfd(uvrisk, 2, str_uvrisk);
+    char str_uvpower[33];      // e.g. 0.399 W/m² = UvPower
     dtostrfd(uvpower, 3, str_uvpower);
     if (json) {
 #ifdef USE_VEML6070_SHOW_RAW
@@ -305,11 +302,9 @@ void Veml6070Show(boolean json)
  * Interface
 \*********************************************************************************************/
 
-#define XSNS_11
-
-boolean Xsns11(byte function)
+bool Xsns11(uint8_t function)
 {
-  boolean result = false;
+  bool result = false;
 
   if (i2c_flg) {
     switch (function) {

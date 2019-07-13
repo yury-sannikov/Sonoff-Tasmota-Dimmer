@@ -1,7 +1,7 @@
 /*
   xdrv_interface.ino - Driver interface support for Sonoff-Tasmota
 
-  Copyright (C) 2018  Theo Arends inspired by ESPEasy
+  Copyright (C) 2019  Theo Arends inspired by ESPEasy
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -17,7 +17,12 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-boolean (* const xdrv_func_ptr[])(byte) PROGMEM = {   // Driver Function Pointers
+#ifdef XFUNC_PTR_IN_ROM
+bool (* const xdrv_func_ptr[])(uint8_t) PROGMEM = {   // Driver Function Pointers
+#else
+bool (* const xdrv_func_ptr[])(uint8_t) = {   // Driver Function Pointers
+#endif
+
 #ifdef XDRV_01
   &Xdrv01,
 #endif
@@ -187,21 +192,7 @@ boolean (* const xdrv_func_ptr[])(byte) PROGMEM = {   // Driver Function Pointer
 
 const uint8_t xdrv_present = sizeof(xdrv_func_ptr) / sizeof(xdrv_func_ptr[0]);  // Number of drivers found
 
-boolean XdrvCommand(uint8_t grpflg, char *type, uint16_t index, char *dataBuf, uint16_t data_len, int16_t payload, uint16_t payload16)
-{
-//  XdrvMailbox.valid = 1;
-  XdrvMailbox.index = index;
-  XdrvMailbox.data_len = data_len;
-  XdrvMailbox.payload16 = payload16;
-  XdrvMailbox.payload = payload;
-  XdrvMailbox.grpflg = grpflg;
-  XdrvMailbox.topic = type;
-  XdrvMailbox.data = dataBuf;
-
-  return XdrvCall(FUNC_COMMAND);
-}
-
-boolean XdrvMqttData(char *topicBuf, uint16_t stopicBuf, char *dataBuf, uint16_t sdataBuf)
+bool XdrvMqttData(char *topicBuf, uint16_t stopicBuf, char *dataBuf, uint16_t sdataBuf)
 {
   XdrvMailbox.index = stopicBuf;
   XdrvMailbox.data_len = sdataBuf;
@@ -211,11 +202,12 @@ boolean XdrvMqttData(char *topicBuf, uint16_t stopicBuf, char *dataBuf, uint16_t
   return XdrvCall(FUNC_MQTT_DATA);
 }
 
-boolean XdrvRulesProcess()
+bool XdrvRulesProcess(void)
 {
   return XdrvCall(FUNC_RULES_PROCESS);
 }
 
+#ifdef USE_DEBUG_DRIVER
 void ShowFreeMem(const char *where)
 {
   char stemp[20];
@@ -223,34 +215,32 @@ void ShowFreeMem(const char *where)
   XdrvMailbox.data = stemp;
   XdrvCall(FUNC_FREE_MEM);
 }
+#endif
 
 /*********************************************************************************************\
  * Function call to all xdrv
- *
- * FUNC_PRE_INIT
- * FUNC_INIT
- * FUNC_LOOP
- * FUNC_MQTT_SUBSCRIBE
- * FUNC_MQTT_INIT
- * return FUNC_MQTT_DATA
- * return FUNC_COMMAND
- * FUNC_SET_POWER
- * FUNC_SHOW_SENSOR
- * FUNC_EVERY_SECOND
- * FUNC_EVERY_50_MSECOND
- * FUNC_EVERY_100_MSECOND
- * FUNC_EVERY_250_MSECOND
- * FUNC_RULES_PROCESS
- * FUNC_FREE_MEM
 \*********************************************************************************************/
 
-boolean XdrvCall(byte Function)
+bool XdrvCall(uint8_t Function)
 {
-  boolean result = false;
+  bool result = false;
 
-  for (byte x = 0; x < xdrv_present; x++) {
+  for (uint8_t x = 0; x < xdrv_present; x++) {
+//    WifiAddDelayWhenDisconnected();
     result = xdrv_func_ptr[x](Function);
-    if (result) break;
+
+    if (result && ((FUNC_COMMAND == Function) ||
+                   (FUNC_COMMAND_DRIVER == Function) ||
+                   (FUNC_MQTT_DATA == Function) ||
+                   (FUNC_RULES_PROCESS == Function) ||
+                   (FUNC_BUTTON_PRESSED == Function) ||
+                   (FUNC_SERIAL == Function) ||
+                   (FUNC_MODULE_INIT == Function) ||
+                   (FUNC_SET_CHANNELS == Function) ||
+                   (FUNC_SET_DEVICE_POWER == Function)
+                  )) {
+      break;
+    }
   }
 
   return result;
