@@ -469,7 +469,11 @@ struct SYSCFG {
   uint8_t       bri_preset_high;           // F07
   int8_t        hum_comp;                  // F08
 
-  uint8_t       free_f09[179];             // F09
+  uint8_t       ot_hot_water_setpoint;     // F09
+  uint8_t       ot_boiler_setpoint;        // F0A
+  uint8_t       ot_flags;                  // F0B
+
+  uint8_t       free_f09[176];             // F0C
 
   uint32_t      keeloq_master_msb;         // FBC
   uint32_t      keeloq_master_lsb;         // FC0

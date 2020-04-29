@@ -91,6 +91,8 @@ extern "C" void custom_crash_callback(struct rst_info * rst_info, uint32_t stack
 
 #ifdef FIRMWARE_SENSORS
 
+#define USE_OPENTHERM
+
 #undef CODE_IMAGE
 #define CODE_IMAGE 2
 #undef CODE_IMAGE_STR
