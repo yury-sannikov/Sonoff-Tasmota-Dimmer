@@ -34,6 +34,7 @@ enum OpenThermConnectionStatus
     OTC_NONE,         // OT not initialized
     OTC_DISCONNECTED, // OT communication timed out
     OTC_CONNECTING,   // Connecting after start or from DISCONNECTED state
+    OTC_HANDSHAKE,    // Wait for the handshake response
     OTC_READY,        // Last Known Good response state is SUCCESS and no requests are in flight
     OTC_INFLIGHT      // Request sent, waiting from the response
 };
@@ -99,6 +100,8 @@ const char *sns_opentherm_connection_stat_to_str(int status)
         return "FAULT";
     case OpenThermConnectionStatus::OTC_CONNECTING:
         return "CONNECTING";
+    case OpenThermConnectionStatus::OTC_HANDSHAKE:
+        return "HANDSHAKE";
     case OpenThermConnectionStatus::OTC_READY:
         return "READY";
     case OpenThermConnectionStatus::OTC_INFLIGHT:
@@ -178,6 +181,10 @@ void sns_opentherm_processResponseCallback(unsigned long response, int st)
     AddLog_P2(LOG_LEVEL_DEBUG_MORE,
               PSTR("[OTH]: Processing response. Status=%s, Response=0x%lX"),
               sns_ot_master->statusToString(status), response);
+
+    if (sns_ot_connection_status == OpenThermConnectionStatus::OTC_HANDSHAKE) {
+        return sns_ot_process_handshake(response, st);
+    }
 
     switch (status)
     {
@@ -264,16 +271,20 @@ void sns_opentherm_stat(bool json)
                         (int)sns_ot_boiler_status.m_boilerSetpoint);
 
         if (sns_ot_boiler_status.m_enableCentralHeating) {
-            WSContentSend_P(PSTR("{s}Central Heating is Active{m}{e}"));
+            WSContentSend_P(PSTR("{s}Central Heating is Enabled{m}{e}"));
         }
         if (sns_ot_boiler_status.m_enableHotWater) {
-            WSContentSend_P(PSTR("{s}Hot Water is Active{m}{e}"));
+            WSContentSend_P(PSTR("{s}Hot Water is Enabled{m}{e}"));
         }
+        if (sns_ot_master->isHotWaterActive(sns_ot_boiler_status.m_slave_raw_status)) {
+            WSContentSend_P(PSTR("{s}Hot Water is ACTIVE{m}{e}"));
+        }
+
         if (sns_ot_master->isFlameOn(sns_ot_boiler_status.m_slave_raw_status)) {
-            WSContentSend_P(PSTR("{s}Flame is ON{m}{e}"));
+            WSContentSend_P(PSTR("{s}Flame is ACTIVE{m}{e}"));
         }
         if (sns_ot_boiler_status.m_enableCooling) {
-            WSContentSend_P(PSTR("{s}Cooling is Active{m}{e}"));
+            WSContentSend_P(PSTR("{s}Cooling is Enabled{m}{e}"));
         }
         if (sns_ot_master->isDiagnostic(sns_ot_boiler_status.m_slave_raw_status)) {
             WSContentSend_P(PSTR("{s}Diagnostic Indication{m}{e}"));
@@ -283,7 +294,7 @@ void sns_opentherm_stat(bool json)
     }
 }
 
-void sns_ot_perform_handshake()
+void sns_ot_start_handshake()
 {
     if (!sns_ot_master)
     {
@@ -291,23 +302,33 @@ void sns_ot_perform_handshake()
     }
 
     AddLog_P2(LOG_LEVEL_DEBUG, PSTR("[OTH]: perform handshake"));
-    unsigned long slave_configuration = sns_ot_master->getSlaveConfiguration();
 
-    if (sns_ot_master->getLastResponseStatus() != OpenThermResponseStatus::SUCCESS)
-    {
+    sns_ot_master->sendRequestAync(
+        OpenTherm::buildRequest(OpenThermMessageType::READ_DATA, OpenThermMessageID::SConfigSMemberIDcode, 0)
+    );
+
+
+    sns_ot_connection_status = OpenThermConnectionStatus::OTC_HANDSHAKE;
+}
+
+void sns_ot_process_handshake(unsigned long response, int st) {
+    OpenThermResponseStatus status = (OpenThermResponseStatus)st;
+
+    if (status != OpenThermResponseStatus::SUCCESS || !sns_ot_master->isValidResponse(response)) {
         AddLog_P2(LOG_LEVEL_ERROR,
                   PSTR("[OTH]: getSlaveConfiguration failed. Status=%s"),
-                  sns_ot_master->statusToString(sns_ot_master->getLastResponseStatus()));
+                  sns_ot_master->statusToString(status));
         sns_ot_connection_status = OpenThermConnectionStatus::OTC_DISCONNECTED;
         return;
     }
 
-    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("[OTH]: getLastResponseStatus SUCCESS. Slave Cfg: %lX"), slave_configuration);
+    AddLog_P2(LOG_LEVEL_DEBUG, PSTR("[OTH]: getLastResponseStatus SUCCESS. Slave Cfg: %lX"), response);
 
-    sns_ot_boiler_status.m_slave_flags = (slave_configuration & 0xFF00) >> 8;
+    sns_ot_boiler_status.m_slave_flags = (response & 0xFF00) >> 8;
 
     sns_ot_connection_status = OpenThermConnectionStatus::OTC_READY;
 }
+
 
 void sns_opentherm_CheckSettings(void)
 {
@@ -327,6 +348,100 @@ void sns_opentherm_CheckSettings(void)
             OpenThermSettingsFlags::HotWaterAlwaysOn;
     }
 }
+/*********************************************************************************************\
+ * Command Processing
+\*********************************************************************************************/
+#define D_CMND_OTHERM "ot_"
+
+#define D_CMND_OTHERM_SET_FLAGS "flags"
+// set the boiler temperature into the boiler status. Sutable for the PID app.
+// After restart will use default
+#define D_CMND_OTHERM_SET_BOILER_SETPOINT "tboiler"
+// set the boiler temperature in the boiler status and settings. Incur flash write.
+// After power on this value will be used
+// Do not overuse tboiler_store, sine it may wear out flash memory
+#define D_CMND_OTHERM_WRITE_BOILER_SETPOINT "tboiler_st"
+
+// set DHW temperature into the boiler status. Do not write it in the flash memory.
+// suitable for the temporary changes
+#define D_CMND_OTHERM_SET_DHW_SETPOINT "twater"
+// write DHW temperature into the settings. Incur flash write
+#define D_CMND_OTHERM_WRITE_DHW_SETPOINT "twater_st"
+
+
+enum OpenThermCommands { CMND_OTHERM_SET_FLAGS, CMND_OTHERM_SET_BOILER_SETPOINT, CMND_OTHERM_WRITE_BOILER_SETPOINT,
+    CMND_OTHERM_SET_DHW_SETPOINT, CMND_OTHERM_WRITE_DHW_SETPOINT };
+const char kOpenThermCommands[] PROGMEM = D_CMND_OTHERM_SET_FLAGS "|" D_CMND_OTHERM_SET_BOILER_SETPOINT "|" D_CMND_OTHERM_WRITE_BOILER_SETPOINT
+    "|" D_CMND_OTHERM_SET_DHW_SETPOINT "|" D_CMND_OTHERM_WRITE_DHW_SETPOINT;
+
+boolean sns_opentherm_command() {
+    char command [CMDSZ];
+    uint8_t ua_prefix_len = strlen(D_CMND_OTHERM);
+
+    boolean serviced = false;
+
+    if (0 != strncasecmp_P(XdrvMailbox.topic, PSTR(D_CMND_OTHERM), ua_prefix_len)) {
+        return serviced;
+    }
+
+    snprintf_P(log_data, sizeof(log_data), "OpenTherm Command called: "
+        "index: %d data_len: %d payload: %d topic: %s data: %s",
+        XdrvMailbox.index,
+        XdrvMailbox.data_len,
+        XdrvMailbox.payload,
+        (XdrvMailbox.payload >= 0 ? XdrvMailbox.topic : ""),
+        (XdrvMailbox.data_len >= 0 ? XdrvMailbox.data : ""));
+    AddLog(LOG_LEVEL_DEBUG);
+
+    int command_code = GetCommandCode(command, sizeof(command), XdrvMailbox.topic + ua_prefix_len, kOpenThermCommands);
+    serviced = true;
+
+    bool query = strlen(XdrvMailbox.data) == 0;
+    char actual[FLOATSZ];
+    switch (command_code) {
+        case CMND_OTHERM_SET_FLAGS:
+            if (!query) {
+                // Set flags value
+                Settings.ot_flags = atoi(XdrvMailbox.data);
+                // Reset boiler status to apply settings
+                sns_opentherm_init_boiler_status();
+            }
+            snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d"), Settings.ot_flags);
+        break;
+        case CMND_OTHERM_SET_BOILER_SETPOINT:
+            if (!query) {
+                sns_ot_boiler_status.m_boilerSetpoint = atof(XdrvMailbox.data);
+            }
+            dtostrfd(sns_ot_boiler_status.m_boilerSetpoint, Settings.flag2.temperature_resolution, actual);
+            snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s"), actual);
+        break;
+        case CMND_OTHERM_WRITE_BOILER_SETPOINT:
+            if (!query) {
+                sns_ot_boiler_status.m_boilerSetpoint = atof(XdrvMailbox.data);
+                Settings.ot_boiler_setpoint = (uint8_t)sns_ot_boiler_status.m_boilerSetpoint;
+            }
+            snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d"), (int)Settings.ot_boiler_setpoint);
+        break;
+        case CMND_OTHERM_SET_DHW_SETPOINT:
+            if (!query) {
+                sns_ot_boiler_status.m_hotWaterSetpoint = atof(XdrvMailbox.data);
+            }
+            dtostrfd(sns_ot_boiler_status.m_hotWaterSetpoint, Settings.flag2.temperature_resolution, actual);
+            snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s"), actual);
+        break;
+        case CMND_OTHERM_WRITE_DHW_SETPOINT:
+            if (!query) {
+                sns_ot_boiler_status.m_hotWaterSetpoint = atof(XdrvMailbox.data);
+                Settings.ot_hot_water_setpoint = (uint8_t)sns_ot_boiler_status.m_hotWaterSetpoint;
+            }
+            snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%d"), (int)Settings.ot_hot_water_setpoint);
+        break;
+        default:
+            serviced = false;
+    }
+    return serviced;
+}
+
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
@@ -379,8 +494,11 @@ bool Xsns85(uint8_t function)
         }
         else if (sns_ot_connection_status == OpenThermConnectionStatus::OTC_CONNECTING)
         {
-            sns_ot_perform_handshake();
+            sns_ot_start_handshake();
         }
+        break;
+    case FUNC_COMMAND:
+        result = sns_opentherm_command();
         break;
     case FUNC_JSON_APPEND:
         sns_opentherm_stat(1);

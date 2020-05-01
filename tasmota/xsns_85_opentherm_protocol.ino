@@ -149,7 +149,7 @@ unsigned long sns_opentherm_set_slave_flags(struct OpenThermCommandT *self, stru
 
     data <<= 8;
 
-    return OpenTherm::buildRequest(OpenThermRequestType::READ, OpenThermMessageID::Status, 0);
+    return OpenTherm::buildRequest(OpenThermRequestType::READ, OpenThermMessageID::Status, data);
 }
 
 void sns_opentherm_parse_slave_flags(struct OpenThermCommandT *self, struct OT_BOILER_STATUS_T *boilerStatus, unsigned long response)
@@ -165,7 +165,7 @@ void sns_opentherm_parse_slave_flags(struct OpenThermCommandT *self, struct OT_B
 
         if (prevState != boilerStatus->m_enableCentralHeating)
         {
-            AddLog_P2(LOG_LEVEL_DEBUG,
+            AddLog_P2(LOG_LEVEL_INFO,
                       PSTR("[OTH]: CH change due to Diag. Old: %s, New: %s"),
                       prevState ? "on" : "off",
                       boilerStatus->m_enableCentralHeating ? "on" : "off");
@@ -200,6 +200,10 @@ unsigned long sns_opentherm_set_boiler_temperature(struct OpenThermCommandT *sel
     {
         return -1;
     }
+    AddLog_P2(LOG_LEVEL_INFO,
+              PSTR("[OTH]: Setting Boiler Temp. Old: %d, New: %d"),
+              (int)self->m_results[0].m_float,
+              (int)status->m_boilerSetpoint);
     self->m_results[0].m_float = status->m_boilerSetpoint;
 
     unsigned int data = OpenTherm::temperatureToData(status->m_boilerSetpoint);
@@ -235,6 +239,11 @@ unsigned long sns_opentherm_set_boiler_dhw_temperature(struct OpenThermCommandT 
     {
         return -1;
     }
+    AddLog_P2(LOG_LEVEL_INFO,
+              PSTR("[OTH]: Setting Hot Water Temp. Old: %d, New: %d"),
+              (int)self->m_results[0].m_float,
+              (int)status->m_hotWaterSetpoint);
+
     self->m_results[0].m_float = status->m_hotWaterSetpoint;
 
     unsigned int data = OpenTherm::temperatureToData(status->m_hotWaterSetpoint);
