@@ -21,6 +21,7 @@ typedef union {
     uint8_t m_u8;
     uint16_t m_u16;
     unsigned long m_ul;
+    bool m_bool;
 } ResponseStorage;
 
 typedef struct OpenThermCommandT
@@ -141,7 +142,21 @@ OpenThermCommand sns_opentherm_commands[] = {
 /////////////////////////////////// Process Slave Status Flags & Control //////////////////////////////////////////////////
 unsigned long sns_opentherm_set_slave_flags(struct OpenThermCommandT *self, struct OT_BOILER_STATUS_T *status)
 {
-    unsigned int data = status->m_enableCentralHeating |
+    bool centralHeatingIsOn = status->m_enableCentralHeating;
+
+    if (status->m_useDiagnosticIndicationAsHeatRequest) {
+        centralHeatingIsOn |= OpenTherm::isDiagnostic(status->m_slave_raw_status);
+    }
+
+    if (self->m_results[1].m_bool != centralHeatingIsOn) {
+        AddLog_P2(LOG_LEVEL_INFO,
+            PSTR("[OTH]: Central Heating transitioning from %s to %s"),
+            self->m_results[1].m_bool ? "on" : "off",
+            status->m_enableCentralHeating ? "on" : "off");
+    }
+    self->m_results[1].m_bool = centralHeatingIsOn;
+
+    unsigned int data = centralHeatingIsOn |
                         (status->m_enableHotWater << 1) |
                         (status->m_enableCooling << 2) |
                         (status->m_enableOutsideTemperatureCompensation << 3) |
@@ -156,21 +171,6 @@ void sns_opentherm_parse_slave_flags(struct OpenThermCommandT *self, struct OT_B
 {
     boilerStatus->m_slave_raw_status = response;
     self->m_results[0].m_ul = response;
-    if (boilerStatus->m_useDiagnosticIndicationAsHeatRequest)
-    {
-        bool prevState = boilerStatus->m_enableCentralHeating;
-
-        // Central heating will be enabled during the next cycle
-        boilerStatus->m_enableCentralHeating = (response & 0x40) != 0;
-
-        if (prevState != boilerStatus->m_enableCentralHeating)
-        {
-            AddLog_P2(LOG_LEVEL_INFO,
-                      PSTR("[OTH]: CH change due to Diag. Old: %s, New: %s"),
-                      prevState ? "on" : "off",
-                      boilerStatus->m_enableCentralHeating ? "on" : "off");
-        }
-    }
 }
 
 #define OT_FLAG_TO_ON_OFF(status, flag) ((((status) & (flag)) != 0) ? 1 : 0)
@@ -382,7 +382,7 @@ void sns_opentherm_check_retry_request()
     {
         cmd->m_flags.notSupported = true;
         AddLog_P2(LOG_LEVEL_ERROR,
-                  PSTR("[OTH]: command %s not supported by the boiler. Last status: %s"),
+                  PSTR("[OTH]: command %s is not supported by the boiler. Last status: %s"),
                   cmd->m_command_name,
                   sns_ot_master->statusToString(sns_ot_master->getLastResponseStatus()));
     }

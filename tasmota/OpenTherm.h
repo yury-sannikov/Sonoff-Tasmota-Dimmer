@@ -145,12 +145,12 @@ public:
 
 
 	//responses
-	bool isFault(unsigned long response);
-	bool isCentralHeatingActive(unsigned long response);
-	bool isHotWaterActive(unsigned long response);
-	bool isFlameOn(unsigned long response);
-	bool isCoolingActive(unsigned long response);
-	bool isDiagnostic(unsigned long response);
+	static bool isFault(unsigned long response);
+	static bool isCentralHeatingActive(unsigned long response);
+	static bool isHotWaterActive(unsigned long response);
+	static bool isFlameOn(unsigned long response);
+	static bool isCoolingActive(unsigned long response);
+	static bool isDiagnostic(unsigned long response);
 	static uint16_t getUInt(const unsigned long response);
 	static float getFloat(const unsigned long response);
 	static unsigned int temperatureToData(float temperature);
